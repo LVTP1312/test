@@ -1,41 +1,1283 @@
-# Compiled Lua sources
-luac.out
+--==================================================
+-- TANPHU GLOBAL PETS FINDER (UI + API, 1M–50M)
+--==================================================
 
-# luarocks build files
-*.src.rock
-*.zip
-*.tar.gz
+repeat task.wait() until game:IsLoaded()
 
-# Object files
-*.o
-*.os
-*.ko
-*.obj
-*.elf
+if _G.TanPhu_GlobalPetsFinder_Loaded then
+    warn("[GlobalPetsFinder] Script đã chạy, không chạy lại.")
+    return
+end
+_G.TanPhu_GlobalPetsFinder_Loaded = true
 
-# Precompiled Headers
-*.gch
-*.pch
+--========================
+-- 🔧 CONFIG
+--========================
+local API_BASE       = "https://reparative-mira-dominatingly.ngrok-free.dev"
 
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-*.def
-*.exp
+local USE_API        = true           -- true = dùng API, false = tắt (UI rỗng, chỉ webhook)
+local ENABLE_SCANNER = true           -- true = client này scan & gửi webhook+API
+local ENABLE_WEBHOOK = true           -- true = cho phép gửi Discord webhook
+local FETCH_INTERVAL = 6              -- giây, chu kỳ đọc API cho UI
 
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
+local WEBHOOK_HIGH   = "https://discordapp.com/api/webhooks/1411329828904374293/elK3umTJvdL6h4ml-EHg9DbM1wCdQJFpOsNWEEB79T0P1hRstSgd_ep75KIp-aHdIdoK" -- 1M–50M
+local WEBHOOK_OVER50 = "https://discordapp.com/api/webhooks/1410314122670903491/KD8clDHrbOMKlArHAoEyMXTqQGD6AAN7ftlYvdkFEOj5a9_VEGA9yqAhoH2XPK77TITb" -- >50M
 
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+--========================
+-- SERVICES
+--========================
+local Players         = game:GetService("Players")
+local HttpService     = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local UIS             = game:GetService("UserInputService")
+local LocalPlayer     = Players.LocalPlayer
 
+-- ⚠️ Kiểm tra server VIP / Private
+local IS_PRIVATE_SERVER = (game.PrivateServerId ~= "" and game.PrivateServerId ~= nil)
+    or (game.PrivateServerOwnerId and game.PrivateServerOwnerId ~= 0)
+
+if IS_PRIVATE_SERVER then
+    warn("[GlobalPetsFinder] Đang ở VIP / Private server → sẽ KHÔNG gửi webhook hoặc add farm vào API.")
+end
+
+--========================
+-- HTTP (exploit request)
+--========================
+local http_request_impl =
+    (typeof(syn) == "table" and typeof(syn.request) == "function" and syn.request)
+    or (typeof(http_request) == "function" and http_request)
+    or (typeof(request) == "function" and request)
+    or (typeof(http) == "table" and typeof(http.request) == "function" and http.request)
+
+if not http_request_impl then
+    warn("[GlobalPetsFinder] ❌ Không tìm thấy http_request_impl (syn/request/http). API/Webhook sẽ không dùng được.")
+end
+
+local function safeRequest(opts)
+    if not http_request_impl then
+        return nil, "no_http"
+    end
+    local ok, res = pcall(http_request_impl, opts)
+    if not ok then
+        return nil, res
+    end
+    return res, nil
+end
+
+local function sendWebhook(url, payload)
+    if not ENABLE_WEBHOOK then return end
+    if IS_PRIVATE_SERVER then return end
+    if not url or url == "" then return end
+
+    local body = HttpService:JSONEncode(payload)
+    local res, err = safeRequest({
+        Url = url,
+        Method = "POST",
+        Headers = {
+            ["Content-Type"] = "application/json"
+        },
+        Body = body
+    })
+    if not res then
+        warn("[GlobalPetsFinder] Webhook error:", err)
+    elseif res.StatusCode and res.StatusCode >= 300 then
+        warn("[GlobalPetsFinder] Webhook HTTP", res.StatusCode, res.Body or "")
+    end
+end
+
+--========================
+-- 🎯 TARGET LIST (BRAINROT)
+--========================
+local targets = {
+    'Chipso and Queso','La Casa Boo','Tang Tang Keletang','Headless Horseman',
+    'Strawberry Elephant','Chicleteira Bicicleteira','Los Chicleteiras',
+    'La Grande Combinasion','Nuclearo Dinossauro','Esok Sekolah','Ketupat Kepat',
+    'Money Money Puggy','Tictac Sahur','Ketchuru and Musturu','Garama and Madundung',
+    'Spaghetti Tualetti','Dragon Cannelloni','67','Mariachi Corazoni','Tacorita Bicicleta',
+    'La Extinct Grande','Las Sis',
+    'Celularcini Viciosini','Los Bros','Tralaledon','Los Tacoritas','Los Primos',
+    'Chillin Chili','Los Combinasionas','Los Hotspotsitos','La Supreme Combinasion',
+    'Los 67','La Secret Combinasion','Burguro And Fryuro','La Spooky Grande','Los Mobilis',
+    'Eviledon','Spooky and Pumpky','Mieteteira Bicicleteira','Los Spooky Combinasionas','Meowl',
+    'Los Matteos','Bisonte Guppitere','La Vacca Saturno Saturnita','Los Spiderinis','Los Tralaleritos',
+    'Yess My Examine','Las Tralaleritas','Job Job Job Sahur','Las Vaquitas Saturnitas','1x1x1x1','Guest 666',
+    'Captiano Moby','La Taco Combinasion','Los Puggies','Los Spaghettis','Fragrama and Chocrama','Orcaledon','Swag Soda'
+}
+
+-- bảng tên được bật / tắt từ UI Rarity & Pets
+local selectedTargets = {}
+for _, name in ipairs(targets) do
+    selectedTargets[name] = true -- mặc định ON hết
+end
+
+-- map tên đã chuẩn hóa -> tên gốc
+local function normalizeName(str)
+    str = tostring(str or ""):gsub("%s+", " ")
+    return string.lower(str)
+end
+
+local normToCanonical = {}
+for _, name in ipairs(targets) do
+    normToCanonical[normalizeName(name)] = name
+end
+
+-- phát hiện pet theo TEXT chính xác 1 trong các name (không còn string.find mơ hồ)
+local function detectBrainrotName(model)
+    if not model then return nil end
+
+    local function checkText(txt)
+        if not txt or txt == "" then return nil end
+        local canon = normToCanonical[normalizeName(txt)]
+        if canon and selectedTargets[canon] then
+            return canon
+        end
+        return nil
+    end
+
+    local found = checkText(model.Name)
+    if found then return found end
+
+    for _, d in ipairs(model:GetDescendants()) do
+        if d:IsA("TextLabel") or d:IsA("TextButton") then
+            local hit = checkText(d.Text)
+            if hit then
+                return hit
+            end
+        end
+    end
+
+    return nil
+end
+
+--========================
+-- 💰 PARSE MPS
+--========================
+local function parseMps(raw)
+    if raw == nil then return 0 end
+    if typeof(raw) == "number" then
+        return raw
+    end
+
+    local s = tostring(raw):gsub(",", ""):gsub("%s+", ""):upper()
+    local num = tonumber(s:match("([%d%.]+)")) or 0
+
+    if s:find("B") then
+        return num * 1e9
+    elseif s:find("M") then
+        return num * 1e6
+    elseif s:find("K") then
+        return num * 1e3
+    else
+        return num
+    end
+end
+
+local function formatMpsShort(v)
+    v = tonumber(v) or 0
+    if v >= 1e9 then
+        return string.format("%.2fB", v/1e9)
+    elseif v >= 1e6 then
+        return string.format("%.2fM", v/1e6)
+    elseif v >= 1e3 then
+        return string.format("%.2fK", v/1e3)
+    else
+        return tostring(math.floor(v))
+    end
+end
+
+local MIN_MPS   = 1_000_000      -- ≥1M mới tính
+local TEN_MPS   = 10_000_000     -- chia tab 1M–10M / 10M+
+local SPLIT_MPS = 50_000_000     -- chỉ nhận ≤50M cho UI/API
+
+-- Notify tier (Filter panel bên trái)
+local notifyRange_1to10M  = true
+local notifyRange_10Mplus = true
+
+--========================
+-- 🌐 API HELPERS
+--========================
+local function apiAddFarm(petName, mps, jobId, placeId)
+    if not USE_API or not API_BASE or API_BASE == "" then return end
+    if IS_PRIVATE_SERVER then return end
+
+    local payload = {
+        pet_name     = petName,
+        farm_display = formatMpsShort(mps) .. "/s",
+        job_id       = jobId,
+        place_id     = placeId,
+        mps          = mps,
+    }
+
+    local body = HttpService:JSONEncode(payload)
+    local res, err = safeRequest({
+        Url = API_BASE .. "/add_farm",
+        Method = "POST",
+        Headers = {["Content-Type"] = "application/json"},
+        Body = body
+    })
+
+    if not res then
+        warn("[GlobalPetsFinder] API add_farm error:", err)
+        return
+    end
+    if res.StatusCode and res.StatusCode >= 300 then
+        warn("[GlobalPetsFinder] API add_farm HTTP", res.StatusCode, res.Body or "")
+    end
+end
+
+local function apiFetchFarms()
+    if not USE_API or not API_BASE or API_BASE == "" then
+        return {}
+    end
+
+    local res, err = safeRequest({
+        Url = API_BASE .. "/farms?limit=80",
+        Method = "GET",
+        Headers = {}
+    })
+
+    if not res then
+        warn("[GlobalPetsFinder] API farms HTTP error:", err)
+        return {}
+    end
+    if res.StatusCode ~= 200 then
+        warn("[GlobalPetsFinder] API farms HTTP", res.StatusCode, res.Body or "")
+        return {}
+    end
+
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(res.Body)
+    end)
+    if not ok then
+        warn("[GlobalPetsFinder] API farms decode error:", data)
+        return {}
+    end
+
+    local farmsList
+    if type(data) == "table" then
+        if type(data.farms) == "table" then
+            farmsList = data.farms
+        elseif #data > 0 then
+            farmsList = data
+        end
+    end
+    if not farmsList then
+        warn("[GlobalPetsFinder] API farms: format không hợp lệ")
+        return {}
+    end
+
+    local result = {}
+    for _, farm in ipairs(farmsList) do
+        local name  = farm.pet_name or farm.name
+        local jobId = farm.job_id   or farm.jobId
+        local mps   = parseMps(farm.mps or farm.farm_display or "")
+
+        if name and jobId and mps >= MIN_MPS and mps <= SPLIT_MPS then
+            table.insert(result, {
+                name  = name,
+                mps   = mps,
+                jobId = jobId,
+            })
+        end
+    end
+
+    print("[GlobalPetsFinder] API farms: nhận được " .. tostring(#result) .. " farm sau filter.")
+    return result
+end
+
+local function apiConsumeFarm(jobId)
+    if not USE_API or not API_BASE or API_BASE == "" then return end
+    if not jobId then return end
+    if IS_PRIVATE_SERVER then return end
+
+    local body = HttpService:JSONEncode({ job_id = jobId })
+    local res, err = safeRequest({
+        Url = API_BASE .. "/consume_farm",
+        Method = "POST",
+        Headers = {
+            ["Content-Type"] = "application/json"
+        },
+        Body = body
+    })
+
+    if not res then
+        warn("[GlobalPetsFinder] API consume_farm error:", err)
+        return
+    end
+    if res.StatusCode and res.StatusCode >= 300 then
+        warn("[GlobalPetsFinder] API consume_farm HTTP", res.StatusCode, res.Body or "")
+    end
+end
+
+--========================
+-- UI + AUTO JOIN
+--========================
+local autoJoinEnabled = false
+local autoJoinedJobs  = {}
+local joinedJobIds    = {}
+
+local currentTab      = "HIGH"   -- "LOW" or "HIGH"
+
+local ScreenGui, MainFrame
+local ScrollingLow, ScrollingHigh
+local ToggleUIButton
+
+local shownLow  = {}
+local shownHigh = {}
+local MAX_PER_TAB = 10
+
+local function AddPetItem(scrolling, petName, mps, jobId)
+    if not scrolling then return end
+
+    local Item = Instance.new("Frame")
+    Item.Name = "PetItem"
+    Item.Size = UDim2.new(1, -8, 0, 42)
+    Item.BackgroundColor3 = Color3.fromRGB(32,40,55)
+    Item.BorderSizePixel = 0
+    Item.Parent = scrolling
+
+    local ItemCorner = Instance.new("UICorner")
+    ItemCorner.CornerRadius = UDim.new(0, 8)
+    ItemCorner.Parent = Item
+
+    local ItemStroke = Instance.new("UIStroke")
+    ItemStroke.Thickness = 1
+    ItemStroke.Color = Color3.fromRGB(0,200,255)
+    ItemStroke.Transparency = 0.15
+    ItemStroke.Parent = Item
+
+    local Name = Instance.new("TextLabel")
+    Name.Size = UDim2.new(0.55, 0, 1, 0)
+    Name.Position = UDim2.new(0, 10, 0, 0)
+    Name.BackgroundTransparency = 1
+    Name.Text = tostring(petName)
+    Name.Font = Enum.Font.GothamMedium
+    Name.TextColor3 = Color3.fromRGB(255,255,255)
+    Name.TextSize = 14
+    Name.TextXAlignment = Enum.TextXAlignment.Left
+    Name.Parent = Item
+
+    local Farm = Instance.new("TextLabel")
+    Farm.Size = UDim2.new(0.2, 0, 1, 0)
+    Farm.Position = UDim2.new(0.55, 0, 0, 0)
+    Farm.BackgroundTransparency = 1
+    Farm.Text = formatMpsShort(mps) .. "/s"
+    Farm.TextColor3 = Color3.fromRGB(180,180,190)
+    Farm.Font = Enum.Font.Gotham
+    Farm.TextSize = 13
+    Farm.Parent = Item
+
+    local Join = Instance.new("TextButton")
+    Join.Size = UDim2.new(0.2, -10, 0, 30)
+    Join.Position = UDim2.new(0.8, 0, 0.5, -15)
+    Join.BackgroundColor3 = Color3.fromRGB(0,140,255)
+    Join.Text = "Join"
+    Join.TextColor3 = Color3.fromRGB(255,255,255)
+    Join.Font = Enum.Font.GothamBold
+    Join.TextSize = 14
+    Join.AutoButtonColor = true
+    Join.Parent = Item
+
+    local JoinCorner = Instance.new("UICorner")
+    JoinCorner.CornerRadius = UDim.new(0, 8)
+    JoinCorner.Parent = Join
+
+    Join.MouseButton1Click:Connect(function()
+        pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+        end)
+    end)
+
+    return Item
+end
+
+local function clearScrolling(frame)
+    if not frame then return end
+    for _, c in ipairs(frame:GetChildren()) do
+        if c:IsA("Frame") and c.Name == "PetItem" then
+            c:Destroy()
+        end
+    end
+end
+
+local function createMainUI()
+    ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "TanPhuGlobalPetsFinder"
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+    MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 450, 0, 380)
+    MainFrame.Position = UDim2.new(0.5, -225, 0.5, -190)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(15,15,18)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+    MainFrame.Parent = ScreenGui
+
+    -- Nút ẩn/hiện UI
+    ToggleUIButton = Instance.new("TextButton")
+    ToggleUIButton.Name = "TanPhuToggleUI"
+    ToggleUIButton.Size = UDim2.new(0, 110, 0, 32)
+    ToggleUIButton.AnchorPoint = Vector2.new(0, 0.5)
+    ToggleUIButton.Position = UDim2.new(0, 8, 0.5, 0)
+    ToggleUIButton.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    ToggleUIButton.BorderSizePixel = 0
+    ToggleUIButton.Text = "Hide UI"
+    ToggleUIButton.Font = Enum.Font.GothamBold
+    ToggleUIButton.TextSize = 14
+    ToggleUIButton.TextColor3 = Color3.fromRGB(255,255,255)
+    ToggleUIButton.AutoButtonColor = true
+    ToggleUIButton.ZIndex = 50
+    ToggleUIButton.Parent = ScreenGui
+
+    local ToggleCorner = Instance.new("UICorner")
+    ToggleCorner.CornerRadius = UDim.new(0, 10)
+    ToggleCorner.Parent = ToggleUIButton
+
+    local ToggleStroke = Instance.new("UIStroke")
+    ToggleStroke.Thickness = 1.4
+    ToggleStroke.Color = Color3.fromRGB(0, 180, 255)
+    ToggleStroke.Transparency = 0.3
+    ToggleStroke.Parent = ToggleUIButton
+
+    local function updateToggleUIPill()
+        if MainFrame and MainFrame.Visible then
+            ToggleUIButton.Text = "Hide UI"
+        else
+            ToggleUIButton.Text = "Show UI"
+        end
+    end
+
+    local FrameCorner = Instance.new("UICorner")
+    FrameCorner.CornerRadius = UDim.new(0, 10)
+    FrameCorner.Parent = MainFrame
+
+    local FrameStroke = Instance.new("UIStroke")
+    FrameStroke.Thickness = 1.5
+    FrameStroke.Color = Color3.fromRGB(0, 180, 255)
+    FrameStroke.Transparency = 0.4
+    FrameStroke.Parent = MainFrame
+
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Size = UDim2.new(1, 0, 0, 42)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(20,20,26)
+    TitleBar.BorderSizePixel = 0
+    TitleBar.Parent = MainFrame
+
+    local TitleCorner = Instance.new("UICorner")
+    TitleCorner.CornerRadius = UDim.new(0, 10)
+    TitleCorner.Parent = TitleBar
+
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDim2.new(1, -20, 1, 0)
+    Title.Position = UDim2.new(0, 10, 0, 0)
+    Title.BackgroundTransparency = 1
+    Title.Text = "TanPhu freehub | Pets Finder (1M–50M via API)"
+    Title.TextColor3 = Color3.fromRGB(0, 255, 255)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 18
+    Title.Parent = TitleBar
+
+    local TitleGradient = Instance.new("UIGradient")
+    TitleGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 255, 200)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 180, 255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 0, 255)),
+    })
+    TitleGradient.Parent = Title
+
+    local CtrlHint = Instance.new("TextLabel")
+    CtrlHint.Size = UDim2.new(0, 100, 0, 16)
+    CtrlHint.Position = UDim2.new(1, -110, 1, -18)
+    CtrlHint.BackgroundTransparency = 1
+    CtrlHint.Text = "[Ctrl] Hide / Reset"
+    CtrlHint.Font = Enum.Font.Gotham
+    CtrlHint.TextSize = 11
+    CtrlHint.TextColor3 = Color3.fromRGB(150,150,160)
+    CtrlHint.TextXAlignment = Enum.TextXAlignment.Right
+    CtrlHint.Parent = TitleBar
+
+    local ControlBar = Instance.new("Frame")
+    ControlBar.Size = UDim2.new(1, -20, 0, 32)
+    ControlBar.Position = UDim2.new(0, 10, 0, 48)
+    ControlBar.BackgroundColor3 = Color3.fromRGB(19,19,24)
+    ControlBar.BorderSizePixel = 0
+    ControlBar.Parent = MainFrame
+
+    local ControlCorner = Instance.new("UICorner")
+    ControlCorner.CornerRadius = UDim.new(0, 8)
+    ControlCorner.Parent = ControlBar
+
+    local AutoJoinLabel = Instance.new("TextLabel")
+    AutoJoinLabel.Size = UDim2.new(0, 120, 1, 0)
+    AutoJoinLabel.Position = UDim2.new(0, 10, 0, 0)
+    AutoJoinLabel.BackgroundTransparency = 1
+    AutoJoinLabel.Text = "Auto Join:"
+    AutoJoinLabel.Font = Enum.Font.GothamSemibold
+    AutoJoinLabel.TextSize = 14
+    AutoJoinLabel.TextColor3 = Color3.fromRGB(220,220,230)
+    AutoJoinLabel.TextXAlignment = Enum.TextXAlignment.Left
+    AutoJoinLabel.Parent = ControlBar
+
+    local AutoJoinButton = Instance.new("TextButton")
+    AutoJoinButton.Size = UDim2.new(0, 110, 0, 26)
+    AutoJoinButton.Position = UDim2.new(0, 110, 0.5, -13)
+    AutoJoinButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+    AutoJoinButton.BorderSizePixel = 0
+    AutoJoinButton.Text = "OFF 🔴"
+    AutoJoinButton.Font = Enum.Font.GothamBold
+    AutoJoinButton.TextSize = 14
+    AutoJoinButton.TextColor3 = Color3.fromRGB(255,255,255)
+    AutoJoinButton.Parent = ControlBar
+
+    local AutoJoinCorner = Instance.new("UICorner")
+    AutoJoinCorner.CornerRadius = UDim.new(0, 8)
+    AutoJoinCorner.Parent = AutoJoinButton
+
+    local AutoJoinStroke = Instance.new("UIStroke")
+    AutoJoinStroke.Thickness = 1.4
+    AutoJoinStroke.Color = Color3.fromRGB(200, 60, 60)
+    AutoJoinStroke.Transparency = 0.2
+    AutoJoinStroke.Parent = AutoJoinButton
+
+    local StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Size = UDim2.new(0, 90, 1, 0)
+    StatusLabel.Position = UDim2.new(1, -95, 0, 0)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.Text = "Online 🟢"
+    StatusLabel.Font = Enum.Font.GothamBold
+    StatusLabel.TextSize = 14
+    StatusLabel.TextColor3 = Color3.fromRGB(80, 255, 120)
+    StatusLabel.TextXAlignment = Enum.TextXAlignment.Right
+    StatusLabel.Parent = ControlBar
+
+    local function updateAutoJoinVisual()
+        if autoJoinEnabled then
+            AutoJoinButton.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+            AutoJoinStroke.Color = Color3.fromRGB(0, 255, 140)
+            AutoJoinButton.Text = "ON 🟢"
+        else
+            AutoJoinButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+            AutoJoinStroke.Color = Color3.fromRGB(200, 60, 60)
+            AutoJoinButton.Text = "OFF 🔴"
+        end
+    end
+    updateAutoJoinVisual()
+
+    AutoJoinButton.MouseButton1Click:Connect(function()
+        autoJoinEnabled = not autoJoinEnabled
+        updateAutoJoinVisual()
+    end)
+
+    local TabBar = Instance.new("Frame")
+    TabBar.Size = UDim2.new(0, 80, 1, -98)
+    TabBar.Position = UDim2.new(0, 10, 0, 88)
+    TabBar.BackgroundColor3 = Color3.fromRGB(18,18,24)
+    TabBar.BorderSizePixel = 0
+    TabBar.Parent = MainFrame
+
+    local TabCorner = Instance.new("UICorner")
+    TabCorner.CornerRadius = UDim.new(0, 8)
+    TabCorner.Parent = TabBar
+
+    local TabStroke = Instance.new("UIStroke")
+    TabStroke.Thickness = 1
+    TabStroke.Color = Color3.fromRGB(50,80,120)
+    TabStroke.Transparency = 0.4
+    TabStroke.Parent = TabBar
+
+    local tabActiveColor   = Color3.fromRGB(0, 180, 120)
+    local tabInactiveColor = Color3.fromRGB(40, 40, 55)
+
+    local BtnLow = Instance.new("TextButton")
+    BtnLow.Size = UDim2.new(1, -12, 0, 32)
+    BtnLow.Position = UDim2.new(0, 6, 0, 10)
+    BtnLow.BackgroundColor3 = tabInactiveColor
+    BtnLow.BorderSizePixel = 0
+    BtnLow.Text = "10M-"
+    BtnLow.Font = Enum.Font.GothamBold
+    BtnLow.TextSize = 14
+    BtnLow.TextColor3 = Color3.fromRGB(230,230,230)
+    BtnLow.Parent = TabBar
+
+    local BtnLowCorner = Instance.new("UICorner")
+    BtnLowCorner.CornerRadius = UDim.new(0, 8)
+    BtnLowCorner.Parent = BtnLow
+
+    local BtnHigh = Instance.new("TextButton")
+    BtnHigh.Size = UDim2.new(1, -12, 0, 32)
+    BtnHigh.Position = UDim2.new(0, 6, 0, 52)
+    BtnHigh.BackgroundColor3 = tabActiveColor
+    BtnHigh.BorderSizePixel = 0
+    BtnHigh.Text = "10M+"
+    BtnHigh.Font = Enum.Font.GothamBold
+    BtnHigh.TextSize = 14
+    BtnHigh.TextColor3 = Color3.fromRGB(230,230,230)
+    BtnHigh.Parent = TabBar
+
+    local BtnHighCorner = Instance.new("UICorner")
+    BtnHighCorner.CornerRadius = UDim.new(0, 8)
+    BtnHighCorner.Parent = BtnHigh
+
+    local DiscordLabel = Instance.new("TextLabel")
+    DiscordLabel.Size = UDim2.new(1, -12, 0, 24)
+    DiscordLabel.Position = UDim2.new(0, 6, 0, 94)
+    DiscordLabel.BackgroundTransparency = 1
+    DiscordLabel.Text = "Discord: discord.gg/uXRpXYPJ"
+    DiscordLabel.Font = Enum.Font.Gotham
+    DiscordLabel.TextSize = 11
+    DiscordLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
+    DiscordLabel.TextWrapped = true
+    DiscordLabel.TextXAlignment = Enum.TextXAlignment.Left
+    DiscordLabel.Parent = TabBar
+
+    ScrollingLow = Instance.new("ScrollingFrame")
+    ScrollingLow.Size = UDim2.new(1, -110, 1, -98)
+    ScrollingLow.Position = UDim2.new(0, 100, 0, 88)
+    ScrollingLow.CanvasSize = UDim2.new(0, 0, 0, 0)
+    ScrollingLow.ScrollBarThickness = 6
+    ScrollingLow.BackgroundColor3 = Color3.fromRGB(12,12,16)
+    ScrollingLow.BackgroundTransparency = 0.1
+    ScrollingLow.BorderSizePixel = 0
+    ScrollingLow.Visible = false
+    ScrollingLow.Parent = MainFrame
+
+    local ScrollingLowCorner = Instance.new("UICorner")
+    ScrollingLowCorner.CornerRadius = UDim.new(0, 8)
+    ScrollingLowCorner.Parent = ScrollingLow
+
+    local LayoutLow = Instance.new("UIListLayout")
+    LayoutLow.Padding = UDim.new(0,8)
+    LayoutLow.SortOrder = Enum.SortOrder.LayoutOrder
+    LayoutLow.Parent = ScrollingLow
+
+    LayoutLow:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        ScrollingLow.CanvasSize = UDim2.new(0, 0, 0, LayoutLow.AbsoluteContentSize.Y + 20)
+    end)
+
+    ScrollingHigh = Instance.new("ScrollingFrame")
+    ScrollingHigh.Size = UDim2.new(1, -110, 1, -98)
+    ScrollingHigh.Position = UDim2.new(0, 100, 0, 88)
+    ScrollingHigh.CanvasSize = UDim2.new(0, 0, 0, 0)
+    ScrollingHigh.ScrollBarThickness = 6
+    ScrollingHigh.BackgroundColor3 = Color3.fromRGB(12,12,16)
+    ScrollingHigh.BackgroundTransparency = 0.1
+    ScrollingHigh.BorderSizePixel = 0
+    ScrollingHigh.Visible = true
+    ScrollingHigh.Parent = MainFrame
+
+    local ScrollingHighCorner = Instance.new("UICorner")
+    ScrollingHighCorner.CornerRadius = UDim.new(0, 8)
+    ScrollingHighCorner.Parent = ScrollingHigh
+
+    local LayoutHigh = Instance.new("UIListLayout")
+    LayoutHigh.Padding = UDim.new(0,8)
+    LayoutHigh.SortOrder = Enum.SortOrder.LayoutOrder
+    LayoutHigh.Parent = ScrollingHigh
+
+    LayoutHigh:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        ScrollingHigh.CanvasSize = UDim2.new(0, 0, 0, LayoutHigh.AbsoluteContentSize.Y + 20)
+    end)
+
+    local function setTab(tab)
+        currentTab = tab
+        if tab == "LOW" then
+            BtnLow.BackgroundColor3  = tabActiveColor
+            BtnHigh.BackgroundColor3 = tabInactiveColor
+            ScrollingLow.Visible      = true
+            ScrollingHigh.Visible     = false
+        else
+            BtnLow.BackgroundColor3  = tabInactiveColor
+            BtnHigh.BackgroundColor3 = tabActiveColor
+            ScrollingLow.Visible      = false
+            ScrollingHigh.Visible     = true
+        end
+    end
+
+    BtnLow.MouseButton1Click:Connect(function()
+        setTab("LOW")
+    end)
+
+    BtnHigh.MouseButton1Click:Connect(function()
+        setTab("HIGH")
+    end)
+
+    UIS.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.LeftControl then
+            if MainFrame.Visible then
+                MainFrame.Visible = false
+            else
+                MainFrame.Visible = true
+                clearScrolling(ScrollingLow)
+                clearScrolling(ScrollingHigh)
+                shownLow  = {}
+                shownHigh = {}
+                autoJoinedJobs = {}
+            end
+            updateToggleUIPill()
+        end
+    end)
+
+    ToggleUIButton.MouseButton1Click:Connect(function()
+        if not MainFrame then return end
+        MainFrame.Visible = not MainFrame.Visible
+        updateToggleUIPill()
+    end)
+
+    updateToggleUIPill()
+end
+
+--========================
+-- FILTER PANEL (1M–10M / 10M+)
+--========================
+local function createFilterUI()
+    if not ScreenGui then return end
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 210, 0, 150)
+    frame.Position = UDim2.new(0.5, -225 - 220, 0.5, -75)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 24, 34)
+    frame.BorderSizePixel = 0
+    frame.Parent = ScreenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 14)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 2
+    stroke.Color = Color3.fromRGB(0, 150, 230)
+    stroke.Transparency = 0.3
+    stroke.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.new(0, 10, 0, 8)
+    title.Size = UDim2.new(1, -20, 0, 22)
+    title.Font = Enum.Font.GothamBold
+    title.Text = "Filters (Notify tiers)"
+    title.TextSize = 16
+    title.TextColor3 = Color3.fromRGB(230, 240, 255)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = frame
+
+    local function makeToggleBtn(y, text)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -20, 0, 34)
+        btn.Position = UDim2.new(0, 10, 0, y)
+        btn.BackgroundColor3 = Color3.fromRGB(35, 42, 60)
+        btn.TextColor3 = Color3.fromRGB(230, 240, 255)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 14
+        btn.BorderSizePixel = 0
+        btn.Text = text
+        btn.Parent = frame
+
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, 10)
+        c.Parent = btn
+
+        local s = Instance.new("UIStroke")
+        s.Thickness = 1.6
+        s.Transparency = 0.4
+        s.Color = Color3.fromRGB(80, 110, 160)
+        s.Parent = btn
+
+        return btn, s
+    end
+
+    local btn1, stroke1 = makeToggleBtn(42, "1M - 10M : ON")
+    local btn2, stroke2 = makeToggleBtn(82, "10M plus : ON")
+
+    local function refresh()
+        if notifyRange_1to10M then
+            btn1.BackgroundColor3 = Color3.fromRGB(0, 170, 120)
+            stroke1.Color = Color3.fromRGB(0, 255, 170)
+            btn1.Text = "1M - 10M : ON"
+        else
+            btn1.BackgroundColor3 = Color3.fromRGB(35, 42, 60)
+            stroke1.Color = Color3.fromRGB(80, 110, 160)
+            btn1.Text = "1M - 10M : OFF"
+        end
+        if notifyRange_10Mplus then
+            btn2.BackgroundColor3 = Color3.fromRGB(0, 170, 120)
+            stroke2.Color = Color3.fromRGB(0, 255, 170)
+            btn2.Text = "10M plus : ON"
+        else
+            btn2.BackgroundColor3 = Color3.fromRGB(35, 42, 60)
+            stroke2.Color = Color3.fromRGB(80, 110, 160)
+            btn2.Text = "10M plus : OFF"
+        end
+    end
+    refresh()
+
+    btn1.MouseButton1Click:Connect(function()
+        notifyRange_1to10M = not notifyRange_1to10M
+        refresh()
+    end)
+
+    btn2.MouseButton1Click:Connect(function()
+        notifyRange_10Mplus = not notifyRange_10Mplus
+        refresh()
+    end)
+end
+
+--========================
+-- RARITY & PETS PANEL (bên phải)
+--========================
+local petButtons = {}
+local currentRarityTab = "Brainrot"
+
+local function createRarityUI()
+    if not ScreenGui then return end
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 270, 0, 360)
+    frame.Position = UDim2.new(0.5, 225 + 20, 0.5, -180)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 24, 34)
+    frame.BorderSizePixel = 0
+    frame.Parent = ScreenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 18)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 2
+    stroke.Color = Color3.fromRGB(0, 150, 230)
+    stroke.Transparency = 0.3
+    stroke.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.new(0, 12, 0, 8)
+    title.Size = UDim2.new(1, -24, 0, 24)
+    title.Font = Enum.Font.GothamBold
+    title.Text = "Rarity & Pets"
+    title.TextSize = 18
+    title.TextColor3 = Color3.fromRGB(230, 240, 255)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = frame
+
+    -- nút X
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.BackgroundTransparency = 1
+    closeBtn.Size = UDim2.new(0, 26, 0, 26)
+    closeBtn.Position = UDim2.new(1, -30, 0, 4)
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.Text = "X"
+    closeBtn.TextSize = 18
+    closeBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+    closeBtn.Parent = frame
+
+    closeBtn.MouseButton1Click:Connect(function()
+        frame.Visible = false
+    end)
+
+    -- tabs
+    local tabHolder = Instance.new("Frame")
+    tabHolder.BackgroundTransparency = 1
+    tabHolder.Position = UDim2.new(0, 10, 0, 40)
+    tabHolder.Size = UDim2.new(1, -20, 0, 32)
+    tabHolder.Parent = frame
+
+    local function makeTab(text, order)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0.5, -4, 1, 0)
+        btn.Position = UDim2.new((order-1)*0.5, (order==1) and 0 or 4, 0, 0)
+        btn.BackgroundColor3 = (order==1) and Color3.fromRGB(0,165,230) or Color3.fromRGB(35,42,60)
+        btn.BorderSizePixel = 0
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 14
+        btn.TextColor3 = Color3.fromRGB(230,240,255)
+        btn.Text = text
+        btn.Parent = tabHolder
+
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, 12)
+        c.Parent = btn
+
+        return btn
+    end
+
+    local tabBrain = makeTab("Brainrot God", 1)
+    local tabSecret = makeTab("Secret", 2)
+
+    local function updateTabs()
+        if currentRarityTab == "Brainrot" then
+            tabBrain.BackgroundColor3 = Color3.fromRGB(0,165,230)
+            tabSecret.BackgroundColor3 = Color3.fromRGB(35,42,60)
+        else
+            tabBrain.BackgroundColor3 = Color3.fromRGB(35,42,60)
+            tabSecret.BackgroundColor3 = Color3.fromRGB(0,165,230)
+        end
+    end
+    updateTabs()
+
+    tabBrain.MouseButton1Click:Connect(function()
+        currentRarityTab = "Brainrot"
+        updateTabs()
+    end)
+
+    tabSecret.MouseButton1Click:Connect(function()
+        currentRarityTab = "Secret"
+        updateTabs()
+    end)
+
+    -- ô search
+    local searchBox = Instance.new("TextBox")
+    searchBox.Size = UDim2.new(1, -20, 0, 30)
+    searchBox.Position = UDim2.new(0, 10, 0, 78)
+    searchBox.BackgroundColor3 = Color3.fromRGB(30, 37, 52)
+    searchBox.BorderSizePixel = 0
+    searchBox.Font = Enum.Font.Gotham
+    searchBox.PlaceholderText = "Search name..."
+    searchBox.Text = ""
+    searchBox.TextColor3 = Color3.fromRGB(230, 240, 255)
+    searchBox.PlaceholderColor3 = Color3.fromRGB(140, 150, 170)
+    searchBox.TextSize = 14
+    searchBox.Parent = frame
+
+    local sc = Instance.new("UICorner")
+    sc.CornerRadius = UDim.new(0, 10)
+    sc.Parent = searchBox
+
+    -- Select All / Clear
+    local bar = Instance.new("Frame")
+    bar.BackgroundTransparency = 1
+    bar.Position = UDim2.new(0, 10, 0, 114)
+    bar.Size = UDim2.new(1, -20, 0, 30)
+    bar.Parent = frame
+
+    local function makeSmallBtn(text, xScale)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(0.5, -4, 1, 0)
+        b.Position = UDim2.new(xScale, xScale==0 and 0 or 4, 0, 0)
+        b.BackgroundColor3 = (text == "Select All") and Color3.fromRGB(0,165,230) or Color3.fromRGB(35,42,60)
+        b.BorderSizePixel = 0
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 14
+        b.TextColor3 = Color3.fromRGB(230,240,255)
+        b.Text = text
+        b.Parent = bar
+
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, 10)
+        c.Parent = b
+
+        return b
+    end
+
+    local btnSelectAll = makeSmallBtn("Select All", 0)
+    local btnClear     = makeSmallBtn("Clear", 0.5)
+
+    -- Scrolling list 2 cột
+    local list = Instance.new("ScrollingFrame")
+    list.BackgroundTransparency = 1
+    list.Position = UDim2.new(0, 10, 0, 150)
+    list.Size = UDim2.new(1, -20, 1, -160)
+    list.CanvasSize = UDim2.new(0, 0, 0, 0)
+    list.ScrollBarThickness = 4
+    list.Parent = frame
+
+    local grid = Instance.new("UIGridLayout")
+    grid.Parent = list
+    grid.CellSize = UDim2.new(0.5, -6, 0, 32)
+    grid.CellPadding = UDim2.new(0, 6, 0, 6)
+    grid.SortOrder = Enum.SortOrder.Name
+
+    grid:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        list.CanvasSize = UDim2.new(0, 0, 0, grid.AbsoluteContentSize.Y + 10)
+    end)
+
+    local function refreshButton(name)
+        local btn = petButtons[name]
+        if not btn then return end
+        if selectedTargets[name] then
+            btn.BackgroundColor3 = Color3.fromRGB(0,165,230)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(35,42,60)
+        end
+    end
+
+    for _, name in ipairs(targets) do
+        local btn = Instance.new("TextButton")
+        btn.Name = name
+        btn.Size = UDim2.new(0, 100, 0, 32)
+        btn.BackgroundColor3 = Color3.fromRGB(0,165,230)
+        btn.BorderSizePixel = 0
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 13
+        btn.TextWrapped = true
+        btn.TextColor3 = Color3.fromRGB(230,240,255)
+        btn.Text = name
+        btn.Parent = list
+
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, 10)
+        c.Parent = btn
+
+        petButtons[name] = btn
+        refreshButton(name)
+
+        btn.MouseButton1Click:Connect(function()
+            selectedTargets[name] = not selectedTargets[name]
+            refreshButton(name)
+        end)
+    end
+
+    -- Select All / Clear
+    btnSelectAll.MouseButton1Click:Connect(function()
+        for _, name in ipairs(targets) do
+            selectedTargets[name] = true
+            refreshButton(name)
+        end
+    end)
+
+    btnClear.MouseButton1Click:Connect(function()
+        for _, name in ipairs(targets) do
+            selectedTargets[name] = false
+            refreshButton(name)
+        end
+    end)
+
+    -- search filter
+    searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local query = string.lower(searchBox.Text or "")
+        for _, name in ipairs(targets) do
+            local btn = petButtons[name]
+            if btn then
+                if query == "" then
+                    btn.Visible = true
+                else
+                    btn.Visible = string.find(string.lower(name), query, 1, true) ~= nil
+                end
+            end
+        end
+    end)
+end
+
+-- tạo toàn bộ UI
+createMainUI()
+createFilterUI()
+createRarityUI()
+
+--========================
+-- 📥 UI LOOP – LẤY LIST PET TỪ API
+--========================
+task.spawn(function()
+    warn("[GlobalPetsFinder] UI loop started. USE_API =", USE_API)
+    if not USE_API then
+        return
+    end
+
+    while task.wait(FETCH_INTERVAL) do
+        if not LocalPlayer.Parent or not ScreenGui or not ScreenGui.Parent then
+            return
+        end
+
+        local farms = apiFetchFarms()
+        if not farms or #farms == 0 then
+            continue
+        end
+
+        for _, pet in ipairs(farms) do
+            local name  = pet.name
+            local mps   = pet.mps
+            local jobId = pet.jobId
+
+            if not (name and jobId and mps) then
+                continue
+            end
+
+            -- chỉ hiện các pet vẫn được chọn trong Rarity UI
+            if selectedTargets[name] == false then
+                continue
+            end
+
+            local key = name .. "|" .. jobId
+
+            local bucketTable
+            local scrolling
+            local isHigh = (mps >= TEN_MPS)
+
+            if isHigh then
+                bucketTable = shownHigh
+                scrolling   = ScrollingHigh
+            else
+                bucketTable = shownLow
+                scrolling   = ScrollingLow
+            end
+
+            if bucketTable[key] then
+                continue
+            end
+
+            local count = 0
+            for _ in pairs(bucketTable) do
+                count += 1
+            end
+            if count >= MAX_PER_TAB then
+                continue
+            end
+
+            local item = AddPetItem(scrolling, name, mps, jobId)
+            bucketTable[key] = item or true
+
+            if autoJoinEnabled then
+                if isHigh and currentTab == "HIGH" and not autoJoinedJobs[jobId] then
+                    autoJoinedJobs[jobId] = true
+                    pcall(function()
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+                    end)
+                elseif (not isHigh) and currentTab == "LOW" and not autoJoinedJobs[jobId] then
+                    autoJoinedJobs[jobId] = true
+                    pcall(function()
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+--========================
+-- 🔍 SCANNER LOCAL → WEBHOOK + API
+--========================
+if ENABLE_SCANNER then
+    local notifiedNormal = {}  -- key = jobId|petName cho 1M–50M
+    local notifiedOver50 = {}  -- key = jobId|petName cho >50M
+
+    local function getMpsFromModel(pet)
+        local mpsObj = pet:FindFirstChild("MPS")
+        if mpsObj and mpsObj.Value ~= nil then
+            local raw = tostring(mpsObj.Value)
+            return parseMps(raw), raw
+        end
+
+        local bestText = nil
+        for _, d in ipairs(pet:GetDescendants()) do
+            if d:IsA("TextLabel") or d:IsA("TextButton") then
+                local t = d.Text
+                if t and t ~= "" then
+                    local up = t:upper()
+                    if up:find("/S") or up:find("M/S") or up:find("PERSEC") then
+                        bestText = t
+                        break
+                    end
+                end
+            end
+        end
+
+        if bestText then
+            return parseMps(bestText), bestText
+        end
+
+        return 0, nil
+    end
+
+    local function scanWorkspaceForPets()
+        if IS_PRIVATE_SERVER then
+            return
+        end
+
+        local jobId   = tostring(game.JobId or "N/A")
+        local placeId = game.PlaceId
+
+        local candidates = {}
+        local petsFolder = workspace:FindFirstChild("Pets")
+
+        if petsFolder then
+            candidates = petsFolder:GetChildren()
+        else
+            for _, inst in ipairs(workspace:GetChildren()) do
+                if inst:IsA("Model") or inst:IsA("Folder") then
+                    table.insert(candidates, inst)
+                end
+            end
+        end
+
+        for _, pet in ipairs(candidates) do
+            local displayName = detectBrainrotName(pet)
+            if not displayName then
+                continue
+            end
+
+            -- name đã được check selectedTargets bên trong detectBrainrotName
+
+            local mps = select(1, getMpsFromModel(pet))
+            if mps < MIN_MPS then
+                continue
+            end
+
+            local over50 = (mps > SPLIT_MPS)
+
+            -- áp dụng filter 1M–10M / 10M+ cho phần 1M–50M
+            if not over50 then
+                local is10Plus = (mps >= TEN_MPS)
+                if (not is10Plus and not notifyRange_1to10M)
+                    or (is10Plus and not notifyRange_10Mplus) then
+                    continue
+                end
+            end
+
+            local key    = jobId .. "|" .. displayName
+
+            if over50 then
+                if notifiedOver50[key] then
+                    continue
+                end
+                notifiedOver50[key] = true
+            else
+                if notifiedNormal[key] then
+                    continue
+                end
+                notifiedNormal[key] = true
+            end
+
+            local joinLink = ("https://chillihub1.github.io/chillihub-joiner/?placeId=%s&gameInstanceId=%s")
+                :format(placeId, jobId)
+
+            local title = over50
+                and "🔔 **Pet >50M Found!**"
+                or  "🔔 **Pet 1M–50M Found!**"
+
+            local content = table.concat({
+                title,
+                "🐾 Name: " .. displayName,
+                "💸 MPS: " .. formatMpsShort(mps) .. "/s",
+                "🆔 Job ID: `" .. jobId .. "`",
+                "🌐 [JOIN HERE](" .. joinLink .. ")"
+            }, "\n")
+
+            if over50 then
+                sendWebhook(WEBHOOK_OVER50, { content = content })
+            else
+                sendWebhook(WEBHOOK_HIGH, { content = content })
+                apiAddFarm(displayName, mps, jobId, placeId)
+            end
+        end
+    end
+
+    task.spawn(function()
+        warn("[GlobalPetsFinder] Local scanner started.")
+        while task.wait(6) do
+            scanWorkspaceForPets()
+        end
+    end)
+
+    local function hookPlayer(plr)
+        plr.CharacterAdded:Connect(function()
+            task.wait(4)
+            pcall(scanWorkspaceForPets)
+        end)
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        hookPlayer(plr)
+    end
+
+    Players.PlayerAdded:Connect(hookPlayer)
+end

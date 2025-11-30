@@ -30,6 +30,7 @@ local Players         = game:GetService("Players")
 local HttpService     = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local UIS             = game:GetService("UserInputService")
+local TweenService    = game:GetService("TweenService")
 local LocalPlayer     = Players.LocalPlayer
 
 -- ⚠️ Kiểm tra server VIP / Private
@@ -73,9 +74,7 @@ local function sendWebhook(url, payload)
     local res, err = safeRequest({
         Url = url,
         Method = "POST",
-        Headers = {
-            ["Content-Type"] = "application/json"
-        },
+        Headers = {["Content-Type"] = "application/json"},
         Body = body
     })
     if not res then
@@ -104,13 +103,12 @@ local targets = {
     'Captiano Moby','La Taco Combinasion','Los Puggies','Los Spaghettis','Fragrama and Chocrama','Orcaledon','Swag Soda'
 }
 
--- bảng tên được bật / tắt từ UI Rarity & Pets
+-- bảng tên bật/tắt từ UI Rarity & Pets (MẶC ĐỊNH OFF HẾT)
 local selectedTargets = {}
 for _, name in ipairs(targets) do
-    selectedTargets[name] = true -- mặc định ON hết
+    selectedTargets[name] = false
 end
 
--- map tên đã chuẩn hóa -> tên gốc
 local function normalizeName(str)
     str = tostring(str or ""):gsub("%s+", " ")
     return string.lower(str)
@@ -121,7 +119,7 @@ for _, name in ipairs(targets) do
     normToCanonical[normalizeName(name)] = name
 end
 
--- phát hiện pet theo TEXT chính xác 1 trong các name (không còn string.find mơ hồ)
+-- detect pet theo TEXT 100% khớp 1 trong các name (đã chuẩn hoá)
 local function detectBrainrotName(model)
     if not model then return nil end
 
@@ -134,14 +132,14 @@ local function detectBrainrotName(model)
         return nil
     end
 
-    local found = checkText(model.Name)
-    if found then return found end
+    local hit = checkText(model.Name)
+    if hit then return hit end
 
     for _, d in ipairs(model:GetDescendants()) do
         if d:IsA("TextLabel") or d:IsA("TextButton") then
-            local hit = checkText(d.Text)
-            if hit then
-                return hit
+            local h = checkText(d.Text)
+            if h then
+                return h
             end
         end
     end
@@ -186,12 +184,8 @@ local function formatMpsShort(v)
 end
 
 local MIN_MPS   = 1_000_000      -- ≥1M mới tính
-local TEN_MPS   = 10_000_000     -- chia tab 1M–10M / 10M+
-local SPLIT_MPS = 50_000_000     -- chỉ nhận ≤50M cho UI/API
-
--- Notify tier (Filter panel bên trái)
-local notifyRange_1to10M  = true
-local notifyRange_10Mplus = true
+local TEN_MPS   = 10_000_000     -- chia tab 10M-/10M+
+local SPLIT_MPS = 50_000_000     -- UI/API chỉ 1–50M
 
 --========================
 -- 🌐 API HELPERS
@@ -294,9 +288,7 @@ local function apiConsumeFarm(jobId)
     local res, err = safeRequest({
         Url = API_BASE .. "/consume_farm",
         Method = "POST",
-        Headers = {
-            ["Content-Type"] = "application/json"
-        },
+        Headers = {["Content-Type"] = "application/json"},
         Body = body
     })
 
@@ -314,7 +306,6 @@ end
 --========================
 local autoJoinEnabled = false
 local autoJoinedJobs  = {}
-local joinedJobIds    = {}
 
 local currentTab      = "HIGH"   -- "LOW" or "HIGH"
 
@@ -570,6 +561,7 @@ local function createMainUI()
         updateAutoJoinVisual()
     end)
 
+    -- Tabs 10M-/10M+
     local TabBar = Instance.new("Frame")
     TabBar.Size = UDim2.new(0, 80, 1, -98)
     TabBar.Position = UDim2.new(0, 10, 0, 88)
@@ -730,102 +722,7 @@ local function createMainUI()
 end
 
 --========================
--- FILTER PANEL (1M–10M / 10M+)
---========================
-local function createFilterUI()
-    if not ScreenGui then return end
-
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 210, 0, 150)
-    frame.Position = UDim2.new(0.5, -225 - 220, 0.5, -75)
-    frame.BackgroundColor3 = Color3.fromRGB(18, 24, 34)
-    frame.BorderSizePixel = 0
-    frame.Parent = ScreenGui
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 14)
-    corner.Parent = frame
-
-    local stroke = Instance.new("UIStroke")
-    stroke.Thickness = 2
-    stroke.Color = Color3.fromRGB(0, 150, 230)
-    stroke.Transparency = 0.3
-    stroke.Parent = frame
-
-    local title = Instance.new("TextLabel")
-    title.BackgroundTransparency = 1
-    title.Position = UDim2.new(0, 10, 0, 8)
-    title.Size = UDim2.new(1, -20, 0, 22)
-    title.Font = Enum.Font.GothamBold
-    title.Text = "Filters (Notify tiers)"
-    title.TextSize = 16
-    title.TextColor3 = Color3.fromRGB(230, 240, 255)
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = frame
-
-    local function makeToggleBtn(y, text)
-        local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(1, -20, 0, 34)
-        btn.Position = UDim2.new(0, 10, 0, y)
-        btn.BackgroundColor3 = Color3.fromRGB(35, 42, 60)
-        btn.TextColor3 = Color3.fromRGB(230, 240, 255)
-        btn.Font = Enum.Font.GothamBold
-        btn.TextSize = 14
-        btn.BorderSizePixel = 0
-        btn.Text = text
-        btn.Parent = frame
-
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 10)
-        c.Parent = btn
-
-        local s = Instance.new("UIStroke")
-        s.Thickness = 1.6
-        s.Transparency = 0.4
-        s.Color = Color3.fromRGB(80, 110, 160)
-        s.Parent = btn
-
-        return btn, s
-    end
-
-    local btn1, stroke1 = makeToggleBtn(42, "1M - 10M : ON")
-    local btn2, stroke2 = makeToggleBtn(82, "10M plus : ON")
-
-    local function refresh()
-        if notifyRange_1to10M then
-            btn1.BackgroundColor3 = Color3.fromRGB(0, 170, 120)
-            stroke1.Color = Color3.fromRGB(0, 255, 170)
-            btn1.Text = "1M - 10M : ON"
-        else
-            btn1.BackgroundColor3 = Color3.fromRGB(35, 42, 60)
-            stroke1.Color = Color3.fromRGB(80, 110, 160)
-            btn1.Text = "1M - 10M : OFF"
-        end
-        if notifyRange_10Mplus then
-            btn2.BackgroundColor3 = Color3.fromRGB(0, 170, 120)
-            stroke2.Color = Color3.fromRGB(0, 255, 170)
-            btn2.Text = "10M plus : ON"
-        else
-            btn2.BackgroundColor3 = Color3.fromRGB(35, 42, 60)
-            stroke2.Color = Color3.fromRGB(80, 110, 160)
-            btn2.Text = "10M plus : OFF"
-        end
-    end
-    refresh()
-
-    btn1.MouseButton1Click:Connect(function()
-        notifyRange_1to10M = not notifyRange_1to10M
-        refresh()
-    end)
-
-    btn2.MouseButton1Click:Connect(function()
-        notifyRange_10Mplus = not notifyRange_10Mplus
-        refresh()
-    end)
-end
-
---========================
--- RARITY & PETS PANEL (bên phải)
+-- RARITY & PETS PANEL (bên phải, mặc định OFF, border xoay gradient)
 --========================
 local petButtons = {}
 local currentRarityTab = "Brainrot"
@@ -846,9 +743,31 @@ local function createRarityUI()
 
     local stroke = Instance.new("UIStroke")
     stroke.Thickness = 2
-    stroke.Color = Color3.fromRGB(0, 150, 230)
-    stroke.Transparency = 0.3
+    stroke.Color = Color3.fromRGB(255,255,255)
+    stroke.Transparency = 0.1
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     stroke.Parent = frame
+
+    -- gradient viền xoay
+    local borderGradient = Instance.new("UIGradient")
+    borderGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 255, 200)),
+        ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 180, 255)),
+        ColorSequenceKeypoint.new(0.66, Color3.fromRGB(180, 0, 255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 255, 200)),
+    })
+    borderGradient.Rotation = 0
+    borderGradient.Parent = frame
+
+    -- animation xoay xoay
+    task.spawn(function()
+        local angle = 0
+        while frame.Parent do
+            angle = (angle + 1) % 360
+            borderGradient.Rotation = angle
+            task.wait(0.03)
+        end
+    end)
 
     local title = Instance.new("TextLabel")
     title.BackgroundTransparency = 1
@@ -876,7 +795,7 @@ local function createRarityUI()
         frame.Visible = false
     end)
 
-    -- tabs
+    -- tabs Brainrot / Secret (hiện chỉ đổi màu cho đẹp)
     local tabHolder = Instance.new("Frame")
     tabHolder.BackgroundTransparency = 1
     tabHolder.Position = UDim2.new(0, 10, 0, 40)
@@ -955,7 +874,7 @@ local function createRarityUI()
         local b = Instance.new("TextButton")
         b.Size = UDim2.new(0.5, -4, 1, 0)
         b.Position = UDim2.new(xScale, xScale==0 and 0 or 4, 0, 0)
-        b.BackgroundColor3 = (text == "Select All") and Color3.fromRGB(0,165,230) or Color3.fromRGB(35,42,60)
+        b.BackgroundColor3 = (text=="Select All") and Color3.fromRGB(0,165,230) or Color3.fromRGB(35,42,60)
         b.BorderSizePixel = 0
         b.Font = Enum.Font.GothamBold
         b.TextSize = 14
@@ -1006,7 +925,7 @@ local function createRarityUI()
         local btn = Instance.new("TextButton")
         btn.Name = name
         btn.Size = UDim2.new(0, 100, 0, 32)
-        btn.BackgroundColor3 = Color3.fromRGB(0,165,230)
+        btn.BackgroundColor3 = Color3.fromRGB(35,42,60) -- OFF mặc định
         btn.BorderSizePixel = 0
         btn.Font = Enum.Font.Gotham
         btn.TextSize = 13
@@ -1020,7 +939,6 @@ local function createRarityUI()
         c.Parent = btn
 
         petButtons[name] = btn
-        refreshButton(name)
 
         btn.MouseButton1Click:Connect(function()
             selectedTargets[name] = not selectedTargets[name]
@@ -1028,7 +946,6 @@ local function createRarityUI()
         end)
     end
 
-    -- Select All / Clear
     btnSelectAll.MouseButton1Click:Connect(function()
         for _, name in ipairs(targets) do
             selectedTargets[name] = true
@@ -1043,7 +960,6 @@ local function createRarityUI()
         end
     end)
 
-    -- search filter
     searchBox:GetPropertyChangedSignal("Text"):Connect(function()
         local query = string.lower(searchBox.Text or "")
         for _, name in ipairs(targets) do
@@ -1059,9 +975,8 @@ local function createRarityUI()
     end)
 end
 
--- tạo toàn bộ UI
+-- tạo UI
 createMainUI()
-createFilterUI()
 createRarityUI()
 
 --========================
@@ -1069,9 +984,7 @@ createRarityUI()
 --========================
 task.spawn(function()
     warn("[GlobalPetsFinder] UI loop started. USE_API =", USE_API)
-    if not USE_API then
-        return
-    end
+    if not USE_API then return end
 
     while task.wait(FETCH_INTERVAL) do
         if not LocalPlayer.Parent or not ScreenGui or not ScreenGui.Parent then
@@ -1092,24 +1005,16 @@ task.spawn(function()
                 continue
             end
 
-            -- chỉ hiện các pet vẫn được chọn trong Rarity UI
-            if selectedTargets[name] == false then
+            -- chỉ hiện pet đang được bật
+            if not selectedTargets[name] then
                 continue
             end
 
             local key = name .. "|" .. jobId
-
-            local bucketTable
-            local scrolling
             local isHigh = (mps >= TEN_MPS)
 
-            if isHigh then
-                bucketTable = shownHigh
-                scrolling   = ScrollingHigh
-            else
-                bucketTable = shownLow
-                scrolling   = ScrollingLow
-            end
+            local bucketTable   = isHigh and shownHigh or shownLow
+            local scrolling     = isHigh and ScrollingHigh or ScrollingLow
 
             if bucketTable[key] then
                 continue
@@ -1147,8 +1052,8 @@ end)
 -- 🔍 SCANNER LOCAL → WEBHOOK + API
 --========================
 if ENABLE_SCANNER then
-    local notifiedNormal = {}  -- key = jobId|petName cho 1M–50M
-    local notifiedOver50 = {}  -- key = jobId|petName cho >50M
+    local notifiedNormal = {}
+    local notifiedOver50 = {}
 
     local function getMpsFromModel(pet)
         local mpsObj = pet:FindFirstChild("MPS")
@@ -1205,24 +1110,12 @@ if ENABLE_SCANNER then
                 continue
             end
 
-            -- name đã được check selectedTargets bên trong detectBrainrotName
-
             local mps = select(1, getMpsFromModel(pet))
             if mps < MIN_MPS then
                 continue
             end
 
             local over50 = (mps > SPLIT_MPS)
-
-            -- áp dụng filter 1M–10M / 10M+ cho phần 1M–50M
-            if not over50 then
-                local is10Plus = (mps >= TEN_MPS)
-                if (not is10Plus and not notifyRange_1to10M)
-                    or (is10Plus and not notifyRange_10Mplus) then
-                    continue
-                end
-            end
-
             local key    = jobId .. "|" .. displayName
 
             if over50 then

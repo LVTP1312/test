@@ -385,7 +385,7 @@ local function clearScrolling(frame)
     end
 end
 
--- MAIN UI (border gradient xoay)
+-- MAIN UI: viền ngoài + cục spinner góc trái
 local function createMainUI()
     ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "TanPhuGlobalPetsFinder"
@@ -407,28 +407,52 @@ local function createMainUI()
 
     local FrameStroke = Instance.new("UIStroke")
     FrameStroke.Thickness = 2
-    FrameStroke.Color = Color3.fromRGB(255,255,255) -- sẽ bị gradient phủ
-    FrameStroke.Transparency = 0
+    FrameStroke.Color = Color3.fromRGB(0, 180, 255)
+    FrameStroke.Transparency = 0.2
     FrameStroke.Parent = MainFrame
 
-    -- gradient cho stroke
-    local StrokeGradient = Instance.new("UIGradient")
-    StrokeGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0,   Color3.fromRGB(0, 255, 200)),
-        ColorSequenceKeypoint.new(0.33,Color3.fromRGB(0, 180, 255)),
-        ColorSequenceKeypoint.new(0.66,Color3.fromRGB(180, 0, 255)),
-        ColorSequenceKeypoint.new(1,   Color3.fromRGB(0, 255, 200)),
-    })
-    StrokeGradient.Rotation = 0
-    StrokeGradient.Parent = FrameStroke
+    -- 🌊 CỤC XOAY GÓC TRÊN TRÁI
+    local Spinner = Instance.new("Frame")
+    Spinner.Name = "CornerSpinner"
+    Spinner.Size = UDim2.new(0, 30, 0, 30)
+    Spinner.Position = UDim2.new(0, -6, 0, -6) -- tràn ra khỏi góc 1 tí
+    Spinner.BackgroundColor3 = Color3.fromRGB(0, 210, 255)
+    Spinner.BorderSizePixel = 0
+    Spinner.Parent = MainFrame
 
-    -- animation xoay xoay quanh viền
+    local SpinnerCorner = Instance.new("UICorner")
+    SpinnerCorner.CornerRadius = UDim.new(1, 0) -- tròn 100%
+    SpinnerCorner.Parent = Spinner
+
+    local SpinnerGradient = Instance.new("UIGradient")
+    SpinnerGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(0,255,255)),
+        ColorSequenceKeypoint.new(0.4, Color3.fromRGB(0,150,255)),
+        ColorSequenceKeypoint.new(0.7, Color3.fromRGB(0,255,200)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(0,255,255)),
+    })
+    SpinnerGradient.Rotation = 0
+    SpinnerGradient.Parent = Spinner
+
+    local SpinnerInner = Instance.new("Frame")
+    SpinnerInner.Size = UDim2.new(0.65, 0, 0.65, 0)
+    SpinnerInner.AnchorPoint = Vector2.new(0.5, 0.5)
+    SpinnerInner.Position = UDim2.new(0.5, 0, 0.5, 0)
+    SpinnerInner.BackgroundColor3 = Color3.fromRGB(15,15,20)
+    SpinnerInner.BorderSizePixel = 0
+    SpinnerInner.Parent = Spinner
+
+    local SpinnerInnerCorner = Instance.new("UICorner")
+    SpinnerInnerCorner.CornerRadius = UDim.new(1, 0)
+    SpinnerInnerCorner.Parent = SpinnerInner
+
+    -- Animation xoay gradient (nhìn như vòng tròn quay)
     task.spawn(function()
         local angle = 0
-        while MainFrame and MainFrame.Parent do
-            angle = (angle + 1) % 360
-            StrokeGradient.Rotation = angle
-            task.wait(0.03) -- chỉnh 0.01 cho nhanh, 0.05 cho chậm
+        while Spinner and Spinner.Parent do
+            angle = (angle + 2) % 360
+            SpinnerGradient.Rotation = angle
+            task.wait(0.03)
         end
     end)
 
@@ -466,8 +490,7 @@ local function createMainUI()
         end
     end
 
-    -- ==== Title bar, control bar, tab bar y chang bản cũ ====
-
+    --===== Title & Control bar =====
     local TitleBar = Instance.new("Frame")
     TitleBar.Size = UDim2.new(1, 0, 0, 42)
     TitleBar.BackgroundColor3 = Color3.fromRGB(20,20,26)

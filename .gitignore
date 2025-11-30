@@ -385,7 +385,7 @@ local function clearScrolling(frame)
     end
 end
 
--- MAIN UI: viền ngoài + cục spinner góc trái
+-- MAIN UI: viền ngoài + cục spinner góc trái (vòng tròn, không lòi góc)
 local function createMainUI()
     ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "TanPhuGlobalPetsFinder"
@@ -411,17 +411,22 @@ local function createMainUI()
     FrameStroke.Transparency = 0.2
     FrameStroke.Parent = MainFrame
 
-    -- 🌊 CỤC XOAY GÓC TRÊN TRÁI
+    -- 🌊 CỤC XOAY GÓC TRÊN TRÁI (vòng tròn, không lòi góc vuông)
     local Spinner = Instance.new("Frame")
     Spinner.Name = "CornerSpinner"
-    Spinner.Size = UDim2.new(0, 30, 0, 30)
-    Spinner.Position = UDim2.new(0, -6, 0, -6) -- tràn ra khỏi góc 1 tí
-    Spinner.BackgroundColor3 = Color3.fromRGB(0, 210, 255)
+    Spinner.Size = UDim2.new(0, 26, 0, 26)
+    Spinner.Position = UDim2.new(0, 10, 0, 8) -- nằm gọn trong góc
+    Spinner.BackgroundTransparency = 1
     Spinner.BorderSizePixel = 0
     Spinner.Parent = MainFrame
 
+    local SpinnerStroke = Instance.new("UIStroke")
+    SpinnerStroke.Thickness = 3
+    SpinnerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    SpinnerStroke.Parent = Spinner
+
     local SpinnerCorner = Instance.new("UICorner")
-    SpinnerCorner.CornerRadius = UDim.new(1, 0) -- tròn 100%
+    SpinnerCorner.CornerRadius = UDim.new(1, 0)
     SpinnerCorner.Parent = Spinner
 
     local SpinnerGradient = Instance.new("UIGradient")
@@ -432,10 +437,10 @@ local function createMainUI()
         ColorSequenceKeypoint.new(1,   Color3.fromRGB(0,255,255)),
     })
     SpinnerGradient.Rotation = 0
-    SpinnerGradient.Parent = Spinner
+    SpinnerGradient.Parent = SpinnerStroke
 
     local SpinnerInner = Instance.new("Frame")
-    SpinnerInner.Size = UDim2.new(0.65, 0, 0.65, 0)
+    SpinnerInner.Size = UDim2.new(0.6, 0, 0.6, 0)
     SpinnerInner.AnchorPoint = Vector2.new(0.5, 0.5)
     SpinnerInner.Position = UDim2.new(0.5, 0, 0.5, 0)
     SpinnerInner.BackgroundColor3 = Color3.fromRGB(15,15,20)
@@ -446,7 +451,6 @@ local function createMainUI()
     SpinnerInnerCorner.CornerRadius = UDim.new(1, 0)
     SpinnerInnerCorner.Parent = SpinnerInner
 
-    -- Animation xoay gradient (nhìn như vòng tròn quay)
     task.spawn(function()
         local angle = 0
         while Spinner and Spinner.Parent do

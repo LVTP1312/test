@@ -30,7 +30,6 @@ local Players         = game:GetService("Players")
 local HttpService     = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local UIS             = game:GetService("UserInputService")
-local TweenService    = game:GetService("TweenService")
 local LocalPlayer     = Players.LocalPlayer
 
 -- ⚠️ Kiểm tra server VIP / Private
@@ -119,7 +118,7 @@ for _, name in ipairs(targets) do
     normToCanonical[normalizeName(name)] = name
 end
 
--- detect pet theo TEXT 100% khớp 1 trong các name (đã chuẩn hoá)
+-- detect pet theo TEXT, chỉ nhận đúng tên trong list + đang ON
 local function detectBrainrotName(model)
     if not model then return nil end
 
@@ -155,10 +154,8 @@ local function parseMps(raw)
     if typeof(raw) == "number" then
         return raw
     end
-
     local s = tostring(raw):gsub(",", ""):gsub("%s+", ""):upper()
     local num = tonumber(s:match("([%d%.]+)")) or 0
-
     if s:find("B") then
         return num * 1e9
     elseif s:find("M") then
@@ -309,7 +306,7 @@ local autoJoinedJobs  = {}
 
 local currentTab      = "HIGH"   -- "LOW" or "HIGH"
 
-local ScreenGui, MainFrame
+local ScreenGui, MainContainer, MainFrame
 local ScrollingLow, ScrollingHigh
 local ToggleUIButton
 
@@ -391,20 +388,65 @@ local function clearScrolling(frame)
     end
 end
 
+-- MAIN UI (có viền xoay)
 local function createMainUI()
     ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "TanPhuGlobalPetsFinder"
     ScreenGui.ResetOnSpawn = false
     ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
+    -- khung ngoài gradient xoay
+    MainContainer = Instance.new("Frame")
+    MainContainer.Name = "TanPhuMainContainer"
+    MainContainer.Size = UDim2.new(0, 450, 0, 380)
+    MainContainer.Position = UDim2.new(0.5, -225, 0.5, -190)
+    MainContainer.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    MainContainer.BorderSizePixel = 0
+    MainContainer.Active = true
+    MainContainer.Draggable = true
+    MainContainer.Parent = ScreenGui
+
+    local containerCorner = Instance.new("UICorner")
+    containerCorner.CornerRadius = UDim.new(0, 22)
+    containerCorner.Parent = MainContainer
+
+    local containerGradient = Instance.new("UIGradient")
+    containerGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(0, 255, 200)),
+        ColorSequenceKeypoint.new(0.33,Color3.fromRGB(0, 180, 255)),
+        ColorSequenceKeypoint.new(0.66,Color3.fromRGB(180, 0, 255)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(0, 255, 200)),
+    })
+    containerGradient.Rotation = 0
+    containerGradient.Parent = MainContainer
+
+    -- animation xoay viền
+    task.spawn(function()
+        local angle = 0
+        while MainContainer and MainContainer.Parent do
+            angle = (angle + 1) % 360
+            containerGradient.Rotation = angle
+            task.wait(0.03)
+        end
+    end)
+
+    -- khung nội dung bên trong (thu 2px để lộ viền)
     MainFrame = Instance.new("Frame")
-    MainFrame.Size = UDim2.new(0, 450, 0, 380)
-    MainFrame.Position = UDim2.new(0.5, -225, 0.5, -190)
+    MainFrame.Size = UDim2.new(1, -4, 1, -4)
+    MainFrame.Position = UDim2.new(0, 2, 0, 2)
     MainFrame.BackgroundColor3 = Color3.fromRGB(15,15,18)
     MainFrame.BorderSizePixel = 0
-    MainFrame.Active = true
-    MainFrame.Draggable = true
-    MainFrame.Parent = ScreenGui
+    MainFrame.Parent = MainContainer
+
+    local FrameCorner = Instance.new("UICorner")
+    FrameCorner.CornerRadius = UDim.new(0, 18)
+    FrameCorner.Parent = MainFrame
+
+    local FrameStroke = Instance.new("UIStroke")
+    FrameStroke.Thickness = 1.5
+    FrameStroke.Color = Color3.fromRGB(0, 120, 210)
+    FrameStroke.Transparency = 0.6
+    FrameStroke.Parent = MainFrame
 
     -- Nút ẩn/hiện UI
     ToggleUIButton = Instance.new("TextButton")
@@ -433,32 +475,18 @@ local function createMainUI()
     ToggleStroke.Parent = ToggleUIButton
 
     local function updateToggleUIPill()
-        if MainFrame and MainFrame.Visible then
+        if MainContainer and MainContainer.Visible then
             ToggleUIButton.Text = "Hide UI"
         else
             ToggleUIButton.Text = "Show UI"
         end
     end
 
-    local FrameCorner = Instance.new("UICorner")
-    FrameCorner.CornerRadius = UDim.new(0, 10)
-    FrameCorner.Parent = MainFrame
-
-    local FrameStroke = Instance.new("UIStroke")
-    FrameStroke.Thickness = 1.5
-    FrameStroke.Color = Color3.fromRGB(0, 180, 255)
-    FrameStroke.Transparency = 0.4
-    FrameStroke.Parent = MainFrame
-
     local TitleBar = Instance.new("Frame")
     TitleBar.Size = UDim2.new(1, 0, 0, 42)
     TitleBar.BackgroundColor3 = Color3.fromRGB(20,20,26)
     TitleBar.BorderSizePixel = 0
     TitleBar.Parent = MainFrame
-
-    local TitleCorner = Instance.new("UICorner")
-    TitleCorner.CornerRadius = UDim.new(0, 10)
-    TitleCorner.Parent = TitleBar
 
     local Title = Instance.new("TextLabel")
     Title.Size = UDim2.new(1, -20, 1, 0)
@@ -698,10 +726,10 @@ local function createMainUI()
     UIS.InputBegan:Connect(function(input, gpe)
         if gpe then return end
         if input.KeyCode == Enum.KeyCode.LeftControl then
-            if MainFrame.Visible then
-                MainFrame.Visible = false
+            if MainContainer.Visible then
+                MainContainer.Visible = false
             else
-                MainFrame.Visible = true
+                MainContainer.Visible = true
                 clearScrolling(ScrollingLow)
                 clearScrolling(ScrollingHigh)
                 shownLow  = {}
@@ -713,8 +741,8 @@ local function createMainUI()
     end)
 
     ToggleUIButton.MouseButton1Click:Connect(function()
-        if not MainFrame then return end
-        MainFrame.Visible = not MainFrame.Visible
+        if not MainContainer then return end
+        MainContainer.Visible = not MainContainer.Visible
         updateToggleUIPill()
     end)
 
@@ -722,7 +750,7 @@ local function createMainUI()
 end
 
 --========================
--- RARITY & PETS PANEL (bên phải, mặc định OFF, border xoay gradient)
+-- RARITY & PETS PANEL (bên phải, mặc định OFF)
 --========================
 local petButtons = {}
 local currentRarityTab = "Brainrot"
@@ -743,31 +771,9 @@ local function createRarityUI()
 
     local stroke = Instance.new("UIStroke")
     stroke.Thickness = 2
-    stroke.Color = Color3.fromRGB(255,255,255)
-    stroke.Transparency = 0.1
-    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Color = Color3.fromRGB(0, 180, 255)
+    stroke.Transparency = 0.2
     stroke.Parent = frame
-
-    -- gradient viền xoay
-    local borderGradient = Instance.new("UIGradient")
-    borderGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 255, 200)),
-        ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 180, 255)),
-        ColorSequenceKeypoint.new(0.66, Color3.fromRGB(180, 0, 255)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 255, 200)),
-    })
-    borderGradient.Rotation = 0
-    borderGradient.Parent = frame
-
-    -- animation xoay xoay
-    task.spawn(function()
-        local angle = 0
-        while frame.Parent do
-            angle = (angle + 1) % 360
-            borderGradient.Rotation = angle
-            task.wait(0.03)
-        end
-    end)
 
     local title = Instance.new("TextLabel")
     title.BackgroundTransparency = 1
@@ -780,7 +786,6 @@ local function createRarityUI()
     title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = frame
 
-    -- nút X
     local closeBtn = Instance.new("TextButton")
     closeBtn.BackgroundTransparency = 1
     closeBtn.Size = UDim2.new(0, 26, 0, 26)
@@ -795,7 +800,6 @@ local function createRarityUI()
         frame.Visible = false
     end)
 
-    -- tabs Brainrot / Secret (hiện chỉ đổi màu cho đẹp)
     local tabHolder = Instance.new("Frame")
     tabHolder.BackgroundTransparency = 1
     tabHolder.Position = UDim2.new(0, 10, 0, 40)
@@ -817,7 +821,6 @@ local function createRarityUI()
         local c = Instance.new("UICorner")
         c.CornerRadius = UDim.new(0, 12)
         c.Parent = btn
-
         return btn
     end
 
@@ -845,7 +848,6 @@ local function createRarityUI()
         updateTabs()
     end)
 
-    -- ô search
     local searchBox = Instance.new("TextBox")
     searchBox.Size = UDim2.new(1, -20, 0, 30)
     searchBox.Position = UDim2.new(0, 10, 0, 78)
@@ -863,7 +865,6 @@ local function createRarityUI()
     sc.CornerRadius = UDim.new(0, 10)
     sc.Parent = searchBox
 
-    -- Select All / Clear
     local bar = Instance.new("Frame")
     bar.BackgroundTransparency = 1
     bar.Position = UDim2.new(0, 10, 0, 114)
@@ -885,14 +886,12 @@ local function createRarityUI()
         local c = Instance.new("UICorner")
         c.CornerRadius = UDim.new(0, 10)
         c.Parent = b
-
         return b
     end
 
     local btnSelectAll = makeSmallBtn("Select All", 0)
     local btnClear     = makeSmallBtn("Clear", 0.5)
 
-    -- Scrolling list 2 cột
     local list = Instance.new("ScrollingFrame")
     list.BackgroundTransparency = 1
     list.Position = UDim2.new(0, 10, 0, 150)
@@ -1005,7 +1004,7 @@ task.spawn(function()
                 continue
             end
 
-            -- chỉ hiện pet đang được bật
+            -- chỉ hiện pet đang bật trong Rarity & Pets
             if not selectedTargets[name] then
                 continue
             end

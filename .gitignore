@@ -32,7 +32,7 @@ local TeleportService = game:GetService("TeleportService")
 local UIS             = game:GetService("UserInputService")
 local LocalPlayer     = Players.LocalPlayer
 
--- ⚠️ Kiểm tra server VIP / Private
+-- ⚠️ VIP / Private
 local IS_PRIVATE_SERVER = (game.PrivateServerId ~= "" and game.PrivateServerId ~= nil)
     or (game.PrivateServerOwnerId and game.PrivateServerOwnerId ~= 0)
 
@@ -142,7 +142,6 @@ local function detectBrainrotName(model)
             end
         end
     end
-
     return nil
 end
 
@@ -271,7 +270,6 @@ local function apiFetchFarms()
             })
         end
     end
-
     print("[GlobalPetsFinder] API farms: nhận được " .. tostring(#result) .. " farm sau filter.")
     return result
 end
@@ -303,10 +301,9 @@ end
 --========================
 local autoJoinEnabled = false
 local autoJoinedJobs  = {}
-
 local currentTab      = "HIGH"   -- "LOW" or "HIGH"
 
-local ScreenGui, MainContainer, MainFrame
+local ScreenGui, MainFrame
 local ScrollingLow, ScrollingHigh
 local ToggleUIButton
 
@@ -388,65 +385,52 @@ local function clearScrolling(frame)
     end
 end
 
--- MAIN UI (có viền xoay)
+-- MAIN UI (border gradient xoay)
 local function createMainUI()
     ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "TanPhuGlobalPetsFinder"
     ScreenGui.ResetOnSpawn = false
     ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
-    -- khung ngoài gradient xoay
-    MainContainer = Instance.new("Frame")
-    MainContainer.Name = "TanPhuMainContainer"
-    MainContainer.Size = UDim2.new(0, 450, 0, 380)
-    MainContainer.Position = UDim2.new(0.5, -225, 0.5, -190)
-    MainContainer.BackgroundColor3 = Color3.fromRGB(255,255,255)
-    MainContainer.BorderSizePixel = 0
-    MainContainer.Active = true
-    MainContainer.Draggable = true
-    MainContainer.Parent = ScreenGui
-
-    local containerCorner = Instance.new("UICorner")
-    containerCorner.CornerRadius = UDim.new(0, 22)
-    containerCorner.Parent = MainContainer
-
-    local containerGradient = Instance.new("UIGradient")
-    containerGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0,   Color3.fromRGB(0, 255, 200)),
-        ColorSequenceKeypoint.new(0.33,Color3.fromRGB(0, 180, 255)),
-        ColorSequenceKeypoint.new(0.66,Color3.fromRGB(180, 0, 255)),
-        ColorSequenceKeypoint.new(1,   Color3.fromRGB(0, 255, 200)),
-    })
-    containerGradient.Rotation = 0
-    containerGradient.Parent = MainContainer
-
-    -- animation xoay viền
-    task.spawn(function()
-        local angle = 0
-        while MainContainer and MainContainer.Parent do
-            angle = (angle + 1) % 360
-            containerGradient.Rotation = angle
-            task.wait(0.03)
-        end
-    end)
-
-    -- khung nội dung bên trong (thu 2px để lộ viền)
     MainFrame = Instance.new("Frame")
-    MainFrame.Size = UDim2.new(1, -4, 1, -4)
-    MainFrame.Position = UDim2.new(0, 2, 0, 2)
+    MainFrame.Size = UDim2.new(0, 450, 0, 380)
+    MainFrame.Position = UDim2.new(0.5, -225, 0.5, -190)
     MainFrame.BackgroundColor3 = Color3.fromRGB(15,15,18)
     MainFrame.BorderSizePixel = 0
-    MainFrame.Parent = MainContainer
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+    MainFrame.Parent = ScreenGui
 
     local FrameCorner = Instance.new("UICorner")
     FrameCorner.CornerRadius = UDim.new(0, 18)
     FrameCorner.Parent = MainFrame
 
     local FrameStroke = Instance.new("UIStroke")
-    FrameStroke.Thickness = 1.5
-    FrameStroke.Color = Color3.fromRGB(0, 120, 210)
-    FrameStroke.Transparency = 0.6
+    FrameStroke.Thickness = 2
+    FrameStroke.Color = Color3.fromRGB(255,255,255) -- sẽ bị gradient phủ
+    FrameStroke.Transparency = 0
     FrameStroke.Parent = MainFrame
+
+    -- gradient cho stroke
+    local StrokeGradient = Instance.new("UIGradient")
+    StrokeGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(0, 255, 200)),
+        ColorSequenceKeypoint.new(0.33,Color3.fromRGB(0, 180, 255)),
+        ColorSequenceKeypoint.new(0.66,Color3.fromRGB(180, 0, 255)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(0, 255, 200)),
+    })
+    StrokeGradient.Rotation = 0
+    StrokeGradient.Parent = FrameStroke
+
+    -- animation xoay xoay quanh viền
+    task.spawn(function()
+        local angle = 0
+        while MainFrame and MainFrame.Parent do
+            angle = (angle + 1) % 360
+            StrokeGradient.Rotation = angle
+            task.wait(0.03) -- chỉnh 0.01 cho nhanh, 0.05 cho chậm
+        end
+    end)
 
     -- Nút ẩn/hiện UI
     ToggleUIButton = Instance.new("TextButton")
@@ -475,12 +459,14 @@ local function createMainUI()
     ToggleStroke.Parent = ToggleUIButton
 
     local function updateToggleUIPill()
-        if MainContainer and MainContainer.Visible then
+        if MainFrame and MainFrame.Visible then
             ToggleUIButton.Text = "Hide UI"
         else
             ToggleUIButton.Text = "Show UI"
         end
     end
+
+    -- ==== Title bar, control bar, tab bar y chang bản cũ ====
 
     local TitleBar = Instance.new("Frame")
     TitleBar.Size = UDim2.new(1, 0, 0, 42)
@@ -726,10 +712,10 @@ local function createMainUI()
     UIS.InputBegan:Connect(function(input, gpe)
         if gpe then return end
         if input.KeyCode == Enum.KeyCode.LeftControl then
-            if MainContainer.Visible then
-                MainContainer.Visible = false
+            if MainFrame.Visible then
+                MainFrame.Visible = false
             else
-                MainContainer.Visible = true
+                MainFrame.Visible = true
                 clearScrolling(ScrollingLow)
                 clearScrolling(ScrollingHigh)
                 shownLow  = {}
@@ -741,8 +727,8 @@ local function createMainUI()
     end)
 
     ToggleUIButton.MouseButton1Click:Connect(function()
-        if not MainContainer then return end
-        MainContainer.Visible = not MainContainer.Visible
+        if not MainFrame then return end
+        MainFrame.Visible = not MainFrame.Visible
         updateToggleUIPill()
     end)
 
@@ -1004,7 +990,6 @@ task.spawn(function()
                 continue
             end
 
-            -- chỉ hiện pet đang bật trong Rarity & Pets
             if not selectedTargets[name] then
                 continue
             end

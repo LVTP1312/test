@@ -6,7 +6,7 @@
 --      - 1M–50M  → Webhook_1 + API (/add_farm)
 --      - >50M    → Webhook_2 (không vào UI này)
 --  • KHÔNG dùng Bot Token trong Lua (chỉ webhook)
---  • TÍCH HỢP DESYNC MOBILE-SAFE (R / /desync / nút Desync)
+--  • TÍCH HỢP DESYNC TỐI ƯU MOBILE (R / /desync / nút Desync)
 --==================================================
 
 repeat task.wait() until game:IsLoaded()
@@ -332,27 +332,51 @@ local function clearScrolling(frame)
 end
 
 --========================
--- DESYNC CORE (logic) – MOBILE SAFE
+-- DESYNC CORE (logic) – GIỮ CHỨC NĂNG, GIẢM NẶNG MOBILE
 --========================
 local RunService = game:GetService("RunService")
 local desyncRunning   = false
 local lastDesyncTime  = 0
 
--- DESYNC siêu nhẹ cho mobile yếu: không Heartbeat spam, không velocity spam dài hạn, không setfflag
+-- Config desync
 local DESYNC_CFG = {
-    TeleportFarCount  = 6,     -- số lần quăng xa
-    TeleportNearCount = 12,    -- số lần jitter gần pivot
-    FarRange          = 2200,  -- tầm quăng xa
-    NearRange         = 70,    -- jitter quanh pivot
-    StepWait          = 0.03,  -- delay giữa mỗi lần teleport
-    KillDelay         = 1.8,   -- thời gian chờ trước khi kill
+    TeleportFarCount  = 18,    -- số lần quăng xa (giảm so với bản ultra)
+    TeleportNearCount = 45,    -- jitter quanh pivot
+    FarRange          = 3000,  -- tầm quăng xa
+    NearRange         = 120,   -- jitter quanh pivot
+    StepWaitFar       = 0.015, -- delay giữa teleport xa
+    StepWaitNear      = 0.015, -- delay giữa jitter
+    VelocityLoops     = 22,    -- số lần spam velocity
+    VelocityValue     = 42000, -- cường độ velocity (giảm bớt)
+    VelocityWait      = 0.02,  -- delay giữa lần set velocity
+    HeartbeatTime     = 0.6,   -- Heartbeat spam ngắn (trước 2–3s)
+    KillDelay         = 2.0,   -- chờ trước khi kill
     Cooldown          = 9,     -- tối thiểu 9s giữa 2 lần desync
 }
 
--- KHÔNG đụng setfflag nữa để tránh game rung dài hạn
+-- Giữ vài FFlag liên quan replicator, bỏ mấy flag vật lý nặng
 local function setupSafeFFlags()
-    -- noop
-    return false
+    if not setfflag then
+        warn("⚠️ setfflag not available - skip flags")
+        return false
+    end
+
+    local flags = {
+        {"GameNetPVHeaderRotationalVelocityZeroCutoffExponent", "-5000"},
+        {"GameNetPVHeaderLinearVelocityZeroCutoffExponent", "-5000"},
+        {"GameNetDontSendRedundantNumTimes", "1"},
+        {"GameNetDontSendRedundantDeltaPositionMillionth", "1"},
+        {"LargeReplicatorWrite5", "true"},
+        {"LargeReplicatorRead5", "true"},
+        {"NextGenReplicatorEnabledWrite4", "true"},
+    }
+
+    for _, flag_data in ipairs(flags) do
+        pcall(function()
+            setfflag(flag_data[1], flag_data[2])
+        end)
+    end
+    return true
 end
 
 local function createDesync(character)
@@ -378,14 +402,15 @@ local function createDesync(character)
 
     desyncRunning = true
     print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("🚀 [DESYNC] STARTING! (MOBILE-SAFE)")
+    print("🚀 [DESYNC] STARTING! (OPTIMIZED)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     local active   = true
     local originCF = rootPart.CFrame
 
-    -- Layer 1: teleport xa vài lần cắt sync
+    -- Layer 1: quăng xa + jitter quanh pivot
     task.spawn(function()
+        -- Teleport xa
         for i = 1, DESYNC_CFG.TeleportFarCount do
             if not active or not rootPart.Parent then break end
             local r = DESYNC_CFG.FarRange
@@ -394,11 +419,11 @@ local function createDesync(character)
                 originCF.Y + math.random(-r, r),
                 originCF.Z + math.random(-r, r)
             )
-            task.wait(DESYNC_CFG.StepWait)
+            task.wait(DESYNC_CFG.StepWaitFar)
         end
 
-        -- jitter quanh pivot trên cao, range nhỏ → đỡ chóng mặt
-        local pivot = originCF * CFrame.new(0, 1200, 0)
+        -- Pivot trên cao để jitter
+        local pivot = originCF * CFrame.new(0, 1600, 0)
         for i = 1, DESYNC_CFG.TeleportNearCount do
             if not active or not rootPart.Parent then break end
             local r = DESYNC_CFG.NearRange
@@ -408,11 +433,37 @@ local function createDesync(character)
                 math.random(-r, r)
             )
             rootPart.CFrame = pivot + off
-            task.wait(DESYNC_CFG.StepWait)
+            task.wait(DESYNC_CFG.StepWaitNear)
         end
     end)
 
-    -- Layer 2: ẩn model
+    -- Layer 2: spam velocity trong thời gian ngắn
+    task.spawn(function()
+        for i = 1, DESYNC_CFG.VelocityLoops do
+            if not active or not rootPart.Parent then break end
+            rootPart.AssemblyLinearVelocity = Vector3.new(
+                math.random(-DESYNC_CFG.VelocityValue, DESYNC_CFG.VelocityValue),
+                math.random(-DESYNC_CFG.VelocityValue, DESYNC_CFG.VelocityValue),
+                math.random(-DESYNC_CFG.VelocityValue, DESYNC_CFG.VelocityValue)
+            )
+            task.wait(DESYNC_CFG.VelocityWait)
+        end
+    end)
+
+    -- Layer 3: xoay model nhưng ít vòng hơn
+    task.spawn(function()
+        for i = 1, 45 do
+            if not active or not rootPart.Parent then break end
+            rootPart.CFrame = rootPart.CFrame * CFrame.Angles(
+                math.rad(math.random(-45,45)),
+                math.rad(math.random(-180,180)),
+                math.rad(math.random(-45,45))
+            )
+            task.wait(0.02)
+        end
+    end)
+
+    -- Layer 4: ẩn character
     task.spawn(function()
         task.wait(0.25)
         for _, v in pairs(character:GetDescendants()) do
@@ -425,12 +476,26 @@ local function createDesync(character)
         end
     end)
 
-    -- Kết thúc desync: trả lại gần vị trí cũ + reset velocity rồi kill
+    -- Layer 5: Heartbeat spam ngắn (0.6s)
+    task.spawn(function()
+        local conn
+        conn = RunService.Heartbeat:Connect(function()
+            if not active or not rootPart.Parent then return end
+            rootPart.AssemblyLinearVelocity = Vector3.new(
+                DESYNC_CFG.VelocityValue,
+                DESYNC_CFG.VelocityValue,
+                DESYNC_CFG.VelocityValue
+            )
+        end)
+        task.wait(DESYNC_CFG.HeartbeatTime)
+        if conn then conn:Disconnect() end
+    end)
+
+    -- Kết thúc: trả lại gần chỗ cũ + reset velocity + kill
     task.spawn(function()
         task.wait(DESYNC_CFG.KillDelay)
 
         if rootPart and rootPart.Parent then
-            -- đưa gần về chỗ cũ + tắt velocity để đỡ rung về lâu dài
             rootPart.CFrame = originCF
             rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             rootPart.RotVelocity = Vector3.new(0, 0, 0)
@@ -1008,5 +1073,5 @@ end
 -- DESYNC STARTUP
 --========================
 setupSafeFFlags()
-print("✨ [READY] TanPhu Global Pets Finder + Desync MOBILE-SAFE loaded!")
+print("✨ [READY] TanPhu Global Pets Finder + Desync OPTIMIZED loaded!")
 print("✨ Bấm R hoặc /desync hoặc nút Desync bên panel trái.")

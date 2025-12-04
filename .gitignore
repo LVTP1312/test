@@ -21,9 +21,12 @@ _G.TanPhu_GlobalPetsFinder_Loaded = true
 -- 🔧 CONFIG
 --========================
 local API_BASE       = "https://reparative-mira-dominatingly.ngrok-free.dev"
-local USE_API        = true
-local ENABLE_SCANNER = true
-local FETCH_INTERVAL = 6
+local USE_API        = true             -- dùng API cho UI
+local ENABLE_SCANNER = true             -- scan local + webhook + API
+
+local FETCH_INTERVAL       = 3          -- UI đọc API mỗi 3s (UI chậm webhook ~2s)
+local FIRST_SCAN_INTERVAL  = 1          -- lần scan đầu sau 1s
+local LATER_SCAN_INTERVAL  = 18         -- các lần scan sau: 18s
 
 local WEBHOOK_HIGH   = "https://discordapp.com/api/webhooks/1411329828904374293/elK3umTJvdL6h4ml-EHg9DbM1wCdQJFpOsNWEEB79T0P1hRstSgd_ep75KIp-aHdIdoK" -- 1M–50M
 local WEBHOOK_OVER50 = "https://discordapp.com/api/webhooks/1410314122670903491/KD8clDHrbOMKlArHAoEyMXTqQGD6AAN7ftlYvdkFEOj5a9_VEGA9yqAhoH2XPK77TITb" -- >50M
@@ -35,6 +38,7 @@ local Players         = game:GetService("Players")
 local HttpService     = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local UIS             = game:GetService("UserInputService")
+local RunService      = game:GetService("RunService")
 local LocalPlayer     = Players.LocalPlayer
 
 --========================
@@ -45,6 +49,8 @@ local http_request_impl =
     or (typeof(http_request) == "function" and http_request)
     or (typeof(request) == "function" and request)
     or (typeof(http) == "table" and typeof(http.request) == "function" and http.request)
+
+print("[GlobalPetsFinder] HTTP impl =", http_request_impl)
 
 if not http_request_impl then
     warn("[GlobalPetsFinder] ❌ Không tìm thấy http_request_impl (syn/request/http). API/Webhook sẽ không dùng được.")
@@ -63,6 +69,9 @@ end
 
 local function sendWebhook(url, payload)
     if not url or url == "" then return end
+    if not http_request_impl then
+        return
+    end
     local body = HttpService:JSONEncode(payload)
     local res, err = safeRequest({
         Url = url,
@@ -106,6 +115,7 @@ end
 local function detectBrainrotName(model)
     if not model then return nil end
 
+    -- tên model
     local nameLower = string.lower(model.Name or "")
     for i, tLower in ipairs(targetsLower) do
         if string.find(nameLower, tLower, 1, true) then
@@ -113,6 +123,7 @@ local function detectBrainrotName(model)
         end
     end
 
+    -- label con
     for _, d in ipairs(model:GetDescendants()) do
         if d:IsA("TextLabel") or d:IsA("TextButton") then
             local txt = d.Text
@@ -176,6 +187,7 @@ local SPLIT_MPS = 50_000_000
 --========================
 local function apiAddFarm(petName, mps, jobId, placeId)
     if not USE_API or not API_BASE or API_BASE == "" then return end
+    if not http_request_impl then return end
 
     local payload = {
         pet_name     = petName,
@@ -206,6 +218,9 @@ end
 
 local function apiFetchFarms()
     if not USE_API or not API_BASE or API_BASE == "" then
+        return {}
+    end
+    if not http_request_impl then
         return {}
     end
 
@@ -255,8 +270,8 @@ end
 --========================
 local autoJoinEnabled   = false
 local autoJoinedJobs    = {}
-local currentTab        = "HIGH"
-local desyncToggleOn    = false
+local currentTab        = "HIGH"   -- "LOW" or "HIGH"
+local desyncToggleOn    = false    -- trạng thái nút Desync (UI)
 local ScreenGui, MainFrame
 local ScrollingLow, ScrollingHigh
 local BtnDesync
@@ -334,7 +349,6 @@ end
 --========================
 -- DESYNC CORE (logic)
 --========================
-local RunService = game:GetService("RunService")
 local desyncRunning   = false
 local lastDesyncTime  = 0
 
@@ -386,18 +400,11 @@ local function setupSafeFFlags()
     return true
 end
 
--- 🔄 Chỉ set FFlag khi bật desync lần đầu
-local fflagsInitialized = false
-local function ensureFFlags()
-    if fflagsInitialized then return end
-    local ok = setupSafeFFlags()
-    -- Dù ok hay không, vẫn set true để không spam setfflag nhiều lần
-    fflagsInitialized = true
-    if ok then
-        warn("[DESYNC] FFlags applied on first desync.")
-    else
-        warn("[DESYNC] FFlags NOT applied (setfflag missing).")
-    end
+-- chỉ set flag khi người chơi bấm Desync lần đầu
+local fflagsSetupDone = false
+local function ensureFFlagsOnce()
+    if fflagsSetupDone then return end
+    fflagsSetupDone = setupSafeFFlags()
 end
 
 local function createDesync(character)
@@ -405,6 +412,9 @@ local function createDesync(character)
         warn("[DESYNC] Đang chạy, chờ respawn xong đã.")
         return
     end
+
+    -- set flag khi chuẩn bị desync
+    ensureFFlagsOnce()
 
     local now = tick()
     if now - lastDesyncTime < DESYNC_CFG.Cooldown then
@@ -524,8 +534,6 @@ local function triggerDesync()
         warn("❌ No character")
         return
     end
-    -- 👉 Chỉ khi nào thật sự bấm Desync / R / /desync mới set FFlag
-    ensureFFlags()
     createDesync(char)
 end
 
@@ -549,6 +557,7 @@ local function createUI()
     ScreenGui.ResetOnSpawn = false
     ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
+    -- Nút Hide UI bên trái màn hình
     local HideButton = Instance.new("TextButton")
     HideButton.Name = "TanPhuHideUI"
     HideButton.Size = UDim2.new(0, 90, 0, 30)
@@ -636,10 +645,10 @@ local function createUI()
     OnlineLabel.Size = UDim2.new(0, 80, 0, 16)
     OnlineLabel.Position = UDim2.new(1, -90, 1, -18)
     OnlineLabel.BackgroundTransparency = 1
-    OnlineLabel.Text = "Online 🟢"
+    OnlineLabel.Text = USE_API and "Online 🟢" or "Offline 🔴"
     OnlineLabel.Font = Enum.Font.GothamSemibold
     OnlineLabel.TextSize = 12
-    OnlineLabel.TextColor3 = Color3.fromRGB(120,255,120)
+    OnlineLabel.TextColor3 = USE_API and Color3.fromRGB(120,255,120) or Color3.fromRGB(255,120,120)
     OnlineLabel.TextXAlignment = Enum.TextXAlignment.Right
     OnlineLabel.Parent = TitleBar
 
@@ -704,6 +713,7 @@ local function createUI()
         updateAutoJoinVisual()
     end)
 
+    -- TAB + DESYNC + DISCORD (bên trái)
     local TabBar = Instance.new("Frame")
     TabBar.Size = UDim2.new(0, 100, 1, -98)
     TabBar.Position = UDim2.new(0, 10, 0, 88)
@@ -754,6 +764,7 @@ local function createUI()
     BtnHighCorner.CornerRadius = UDim.new(0, 8)
     BtnHighCorner.Parent = BtnHigh
 
+    -- Nút DESYNC ở dưới 10M-/10M+
     BtnDesync = Instance.new("TextButton")
     BtnDesync.Size = UDim2.new(1, -20, 0, 28)
     BtnDesync.Position = UDim2.new(0, 10, 0, 94)
@@ -791,6 +802,7 @@ local function createUI()
         end)
     end)
 
+    -- Dòng Discord dưới nữa
     local DiscordLabel = Instance.new("TextLabel")
     DiscordLabel.Size = UDim2.new(1, -20, 0, 36)
     DiscordLabel.Position = UDim2.new(0, 10, 1, -42)
@@ -804,6 +816,7 @@ local function createUI()
     DiscordLabel.TextYAlignment = Enum.TextYAlignment.Top
     DiscordLabel.Parent = TabBar
 
+    -- LIST 10M-/10M+
     ScrollingLow = Instance.new("ScrollingFrame")
     ScrollingLow.Size = UDim2.new(1, -130, 1, -98)
     ScrollingLow.Position = UDim2.new(0, 120, 0, 88)
@@ -952,6 +965,7 @@ end)
 --========================
 if ENABLE_SCANNER then
     local bestMpsPerPet = {}
+    local firstScanDone = false
 
     local function getMpsFromModel(pet)
         local mpsObj = pet:FindFirstChild("MPS")
@@ -983,7 +997,10 @@ if ENABLE_SCANNER then
 
     task.spawn(function()
         warn("[GlobalPetsFinder] Local scanner started.")
-        while task.wait(6) do
+        while true do
+            local waitTime = firstScanDone and LATER_SCAN_INTERVAL or FIRST_SCAN_INTERVAL
+            task.wait(waitTime)
+
             local jobId   = tostring(game.JobId or "N/A")
             local placeId = game.PlaceId
 
@@ -1041,12 +1058,14 @@ if ENABLE_SCANNER then
                     apiAddFarm(displayName, mps, jobId, placeId)
                 end
             end
+
+            firstScanDone = true
         end
     end)
 end
 
 --========================
--- DESYNC STARTUP
+-- DESYNC STARTUP (chỉ log trạng thái)
 --========================
 print("✨ [READY] TanPhu Global Pets Finder + SOFT Desync loaded!")
-print("✨ Bấm R hoặc /desync hoặc nút Desync bên panel trái. FFlags chỉ set khi lần đầu desync.")
+print("✨ Bấm R hoặc /desync hoặc nút Desync bên panel trái.")

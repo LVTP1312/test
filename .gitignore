@@ -339,17 +339,17 @@ end
 local RunService = game:GetService("RunService")
 local desyncRunning = false
 
--- Cấu hình nhẹ cho DESYNC (mượt hơn, ít giật về)
+-- Cấu hình SOFT DESYNC cho mobile yếu (ít giật, vẫn bẩn net)
 local DESYNC_CFG = {
-    PosLoopsFar   = 12,    -- số lần quăng xa để cắt sync
-    PosLoopsNear  = 36,    -- số lần jitter gần 1 điểm ảo (mượt hơn)
-    FarRange      = 7000,  -- tầm quăng xa (trước là 9999)
-    NearRange     = 120,   -- tầm jitter quanh pivot
-    VelLoops      = 35,    -- số vòng spam velocity
-    VelPower      = 45000, -- lực velocity (trước là 99999 → bớt giật)
-    RotLoops      = 80,    -- số vòng xoay (trước 120, giảm cho đỡ chóng mặt)
-    HeartbeatTime = 2,     -- giữ velocity cao 2s
-    KillDelay     = 2,     -- kill sau 2s (giống bản cũ)
+    PosLoopsFar   = 6,     -- quăng xa ít lần hơn
+    PosLoopsNear  = 18,    -- jitter ít vòng hơn
+    FarRange      = 2500,  -- tầm quăng xa (giảm mạnh)
+    NearRange     = 60,    -- jitter quanh pivot nhỏ hơn
+    VelLoops      = 18,    -- ít vòng spam velocity
+    VelPower      = 22000, -- lực velocity giảm nhiều
+    RotLoops      = 30,    -- xoay ít → màn đỡ quay điên
+    HeartbeatTime = 1.6,   -- giữ velocity cao 1.6s
+    KillDelay     = 1.8,   -- kill sớm hơn chút
 }
 
 local function setupSafeFFlags()
@@ -404,15 +404,15 @@ local function createDesync(character)
 
     desyncRunning = true
     print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("🚀 [DESYNC] STARTING!")
+    print("🚀 [DESYNC] STARTING! (SOFT MOBILE)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     local active   = true
     local originCF = rootPart.CFrame
 
-    -- Layer 1: Position (2 pha → ít bị giật về hơn)
+    -- Layer 1: Position (2 pha, tầm nhỏ hơn → ít giật hơn)
     task.spawn(function()
-        -- Pha 1: quăng xa vài lần để cắt sync với server
+        -- Pha 1: quăng xa vài lần để cắt sync
         for i = 1, DESYNC_CFG.PosLoopsFar do
             if not active or not rootPart.Parent then break end
             local r = DESYNC_CFG.FarRange
@@ -421,11 +421,11 @@ local function createDesync(character)
                 originCF.Y + math.random(-r, r),
                 originCF.Z + math.random(-r, r)
             )
-            task.wait()
+            task.wait(0.02)
         end
 
-        -- Pha 2: jitter quanh 1 điểm ảo trên cao (client thấy mượt hơn)
-        local pivot = originCF * CFrame.new(0, 2000, 0)
+        -- Pha 2: jitter quanh pivot trên cao (camera đỡ điên vì range nhỏ)
+        local pivot = originCF * CFrame.new(0, 1200, 0)
         for i = 1, DESYNC_CFG.PosLoopsNear do
             if not active or not rootPart.Parent then break end
             local r = DESYNC_CFG.NearRange
@@ -435,11 +435,11 @@ local function createDesync(character)
                 math.random(-r, r)
             )
             rootPart.CFrame = pivot + off
-            task.wait()
+            task.wait(0.02)
         end
     end)
 
-    -- Layer 2: Velocity (giảm lực nhưng giữ spam → vẫn khó bắt vị trí thật)
+    -- Layer 2: Velocity (nhẹ hơn rất nhiều)
     task.spawn(function()
         for i = 1, DESYNC_CFG.VelLoops do
             if not active or not rootPart.Parent then break end
@@ -449,24 +449,24 @@ local function createDesync(character)
                 math.random(-v, v),
                 math.random(-v, v)
             )
-            task.wait(0.01)
+            task.wait(0.02)
         end
     end)
 
-    -- Layer 3: Rotation (giảm vòng cho đỡ loạn hình)
+    -- Layer 3: Rotation (ít vòng để đỡ chóng mặt)
     task.spawn(function()
         for i = 1, DESYNC_CFG.RotLoops do
             if not active or not rootPart.Parent then break end
             rootPart.CFrame = rootPart.CFrame * CFrame.Angles(
+                math.rad(math.random(-90,90)),
                 math.rad(math.random(-180,180)),
-                math.rad(math.random(-180,180)),
-                math.rad(math.random(-180,180))
+                math.rad(math.random(-90,90))
             )
-            task.wait()
+            task.wait(0.02)
         end
     end)
 
-    -- Layer 4: Invisible (y như cũ)
+    -- Layer 4: Invisible
     task.spawn(function()
         task.wait(0.25)
         for _, v in pairs(character:GetDescendants()) do
@@ -479,7 +479,7 @@ local function createDesync(character)
         end
     end)
 
-    -- Layer 5: Heartbeat (giữ velocity cao nhưng không max 99999 nữa)
+    -- Layer 5: Heartbeat giữ velocity cao
     task.spawn(function()
         local conn
         conn = RunService.Heartbeat:Connect(function()
@@ -492,7 +492,7 @@ local function createDesync(character)
         active = false
     end)
 
-    -- Kill + respawn nhanh (giữ logic cũ, dùng KillDelay trong config)
+    -- Kill + respawn (giữ logic cũ, chỉ đổi thời gian)
     task.spawn(function()
         task.wait(DESYNC_CFG.KillDelay)
         if humanoid and humanoid.Parent then
@@ -1049,5 +1049,5 @@ end
 -- DESYNC STARTUP
 --========================
 setupSafeFFlags()
-print("✨ [READY] TanPhu Global Pets Finder + Desync loaded!")
+print("✨ [READY] TanPhu Global Pets Finder + SOFT Desync loaded!")
 print("✨ Bấm R hoặc /desync hoặc nút Desync bên panel trái.")

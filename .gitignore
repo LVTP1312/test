@@ -7,6 +7,7 @@
 --      - >50M    → Webhook_2 (không vào UI này)
 --  • KHÔNG dùng Bot Token trong Lua (chỉ webhook)
 --  • TÍCH HỢP SOFT DESYNC CHO MOBILE (R / /desync / nút Desync)
+--  • Giữ nguyên teleport desync, chỉ giảm giật sau khi dùng xong
 --==================================================
 
 repeat task.wait() until game:IsLoaded()
@@ -332,7 +333,7 @@ local function clearScrolling(frame)
 end
 
 --========================
--- DESYNC CORE (logic)
+-- DESYNC CORE (logic) – giữ nguyên teleport, tối ưu khúc sau
 --========================
 local RunService = game:GetService("RunService")
 local desyncRunning   = false
@@ -349,41 +350,10 @@ local DESYNC_CFG = {
     Cooldown          = 9,     -- tối thiểu 9s giữa 2 lần desync
 }
 
+-- ⚠️ Không set FFlag nữa để tránh bị giật khi di chuyển bình thường
 local function setupSafeFFlags()
-    if not setfflag then
-        warn("⚠️  setfflag not available - continuing without flags")
-        return false
-    end
-    
-    local flags = {
-        {"GameNetPVHeaderRotationalVelocityZeroCutoffExponent", "-5000"},
-        {"GameNetPVHeaderLinearVelocityZeroCutoffExponent", "-5000"},
-        {"MaxAcceptableUpdateDelay", "1"},
-        {"InterpolationFrameVelocityThresholdMillionth", "5"},
-        {"InterpolationFrameRotVelocityThresholdMillionth", "5"},
-        {"InterpolationFramePositionThresholdMillionth", "5"},
-        {"CheckPVCachedVelThresholdPercent", "10"},
-        {"CheckPVCachedRotVelThresholdPercent", "10"},
-        {"GameNetDontSendRedundantNumTimes", "1"},
-        {"GameNetDontSendRedundantDeltaPositionMillionth", "1"},
-        {"ServerMaxBandwith", "52"},
-        {"PhysicsSenderMaxBandwidthBps", "20000"},
-        {"S2PhysicsSenderRate", "15000"},
-        {"MaxTimestepMultiplierAcceleration", "100"},
-        {"WorldStepMax", "30"},
-        {"AngularVelociryLimit", "360"},
-        {"LargeReplicatorWrite5", "true"},
-        {"LargeReplicatorRead5", "true"},
-        {"NextGenReplicatorEnabledWrite4", "true"},
-        {"DisableDPIScale", "true"},
-    }
-
-    for _, flag_data in ipairs(flags) do
-        pcall(function()
-            setfflag(flag_data[1], flag_data[2])
-        end)
-    end
-    return true
+    warn("[DESYNC] Bỏ qua setfflag để tránh jitter dài hạn.")
+    return false
 end
 
 local function createDesync(character)
@@ -409,7 +379,7 @@ local function createDesync(character)
 
     desyncRunning = true
     print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("🚀 [DESYNC] STARTING! (SOFT MOBILE)")
+    print("🚀 [DESYNC] STARTING! (SOFT MOBILE, NO FFLAG)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     local active   = true
@@ -514,14 +484,22 @@ local function triggerDesync()
     createDesync(char)
 end
 
--- Optional: sau khi respawn, đảm bảo velocity sạch sẽ
+-- Sau khi respawn: giữ HRP sạch velocity một đoạn để hết giật khi di chuyển
 Players.LocalPlayer.CharacterAdded:Connect(function(char)
-    task.delay(0.3, function()
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then
+    task.delay(0.1, function()
+        local hrp = char:WaitForChild("HumanoidRootPart", 3)
+        if not hrp then return end
+
+        local start = tick()
+        local conn
+        conn = RunService.Heartbeat:Connect(function()
+            if not hrp.Parent or tick() - start > 2.5 then
+                if conn then conn:Disconnect() end
+                return
+            end
             hrp.AssemblyLinearVelocity = Vector3.new(0,0,0)
             hrp.RotVelocity = Vector3.new(0,0,0)
-        end
+        end)
     end)
 end)
 
@@ -1034,5 +1012,5 @@ end
 -- DESYNC STARTUP
 --========================
 setupSafeFFlags()
-print("✨ [READY] TanPhu Global Pets Finder + SOFT Desync loaded!")
+print("✨ [READY] TanPhu Global Pets Finder + SOFT Desync (no FFlag, anti-giật sau) loaded!")
 print("✨ Bấm R hoặc /desync hoặc nút Desync bên panel trái.")

@@ -6,7 +6,10 @@
 --      - 1M–50M  → Webhook_1 + API (/add_farm)
 --      - >50M    → Webhook_2 (không vào UI này)
 --  • KHÔNG dùng Bot Token trong Lua (chỉ webhook)
---  • TÍCH HỢP DESYNC BALANCED (R / /desync / nút Desync)
+--  • TÍCH HỢP DESYNC (R / /desync / nút Desync)
+--    - Teleport + velocity + xoay loạn
+--    - Freeze camera để không rung
+--    - Sau respawn không giật giật về nữa
 --==================================================
 
 repeat task.wait() until game:IsLoaded()
@@ -332,31 +335,31 @@ local function clearScrolling(frame)
 end
 
 --========================
--- DESYNC CORE (logic) – BALANCED, HẾT GIẬT VỀ SAU KHI DESYNC
+-- DESYNC CORE (logic) – TELEPORT + VELOCITY + XOAY, FREEZE CAMERA
 --========================
 local RunService = game:GetService("RunService")
 local desyncRunning  = false
 local lastDesyncTime = 0
 
 local DESYNC_CFG = {
-    TeleportFarCount  = 16,    -- số lần quăng xa
-    TeleportNearCount = 32,    -- số lần jitter quanh pivot
-    FarRange          = 4000,  -- tầm quăng xa
-    NearRange         = 200,   -- jitter quanh pivot
-    StepWaitFar       = 0.01,  -- delay teleport xa
-    StepWaitNear      = 0.01,  -- delay jitter
-    VelocityLoops     = 30,    -- số lần spam velocity
-    VelocityValue     = 80000, -- cường độ velocity
-    VelocityWait      = 0.015, -- delay giữa lần set velocity
-    RotationLoops     = 50,    -- số vòng xoay
-    RotationWait      = 0.02,  -- delay xoay
-    KillDelay         = 1.4,   -- chờ trước khi kill
-    Cooldown          = 8,     -- tối thiểu 8s giữa 2 lần desync
-    StabilizeTime     = 1.5,   -- thời gian ép velocity=0 sau respawn
+    TeleportFarCount  = 22,     -- số lần quăng xa
+    TeleportNearCount = 40,     -- số lần jitter quanh pivot
+    FarRange          = 6000,   -- tầm quăng xa (rộng cho desync mạnh)
+    NearRange         = 250,    -- jitter quanh pivot
+    StepWaitFar       = 0.01,   -- delay teleport xa
+    StepWaitNear      = 0.01,   -- delay jitter
+    VelocityLoops     = 35,     -- số lần spam velocity
+    VelocityValue     = 120000, -- cường độ velocity
+    VelocityWait      = 0.012,  -- delay giữa lần set velocity
+    RotationLoops     = 60,     -- số vòng xoay
+    RotationWait      = 0.015,  -- delay xoay
+    KillDelay         = 1.6,    -- chờ trước khi kill
+    Cooldown          = 8,      -- tối thiểu 8s giữa 2 lần desync
+    StabilizeTime     = 1.5,    -- thời gian ép velocity=0 sau respawn
 }
 
--- Không đụng FFlag nữa để tránh side-effect lâu
 local function setupSafeFFlags()
+    -- Không dùng FFlag để tránh giật về lâu dài
     return false
 end
 
@@ -381,13 +384,28 @@ local function createDesync(character)
         return
     end
 
+    local cam = workspace.CurrentCamera
+    if not cam then
+        warn("❌ No camera")
+        return
+    end
+
     desyncRunning = true
     print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("🚀 [DESYNC] STARTING! (BALANCED)")
+    print("🚀 [DESYNC] STARTING! (CAM FREEZE)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     local active   = true
     local originCF = rootPart.CFrame
+
+    -- Lưu trạng thái camera
+    local oldCamType   = cam.CameraType
+    local oldSubject   = cam.CameraSubject
+    local oldCamCFrame = cam.CFrame
+
+    -- Freeze camera để không thấy rung
+    cam.CameraType = Enum.CameraType.Scriptable
+    cam.CFrame = oldCamCFrame
 
     -- Layer 1: teleport xa + jitter quanh pivot
     task.spawn(function()
@@ -404,7 +422,7 @@ local function createDesync(character)
         end
 
         -- Pivot trên cao để jitter
-        local pivot = originCF * CFrame.new(0, 1500, 0)
+        local pivot = originCF * CFrame.new(0, 1800, 0)
         for i = 1, DESYNC_CFG.TeleportNearCount do
             if not active or not rootPart.Parent then break end
             local r = DESYNC_CFG.NearRange
@@ -418,7 +436,7 @@ local function createDesync(character)
         end
     end)
 
-    -- Layer 2: spam velocity
+    -- Layer 2: spam velocity mạnh
     task.spawn(function()
         for i = 1, DESYNC_CFG.VelocityLoops do
             if not active or not rootPart.Parent then break end
@@ -457,15 +475,13 @@ local function createDesync(character)
         end
     end)
 
-    -- Kết thúc: reset velocity + kill
+    -- Kết thúc: kill + để camera chờ đến khi respawn rồi reset
     task.spawn(function()
         task.wait(DESYNC_CFG.KillDelay)
 
         active = false
 
         if rootPart and rootPart.Parent then
-            -- đưa về gần chỗ cũ và tắt hoàn toàn velocity
-            rootPart.CFrame = originCF
             rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             rootPart.RotVelocity = Vector3.new(0, 0, 0)
         end
@@ -474,34 +490,18 @@ local function createDesync(character)
             humanoid.Health = 0
         end
 
-        task.wait(1.2)
-
-        if not Players.LocalPlayer.Character
-            or Players.LocalPlayer.Character == character then
-
-            pcall(function()
-                for _, tool in pairs(Players.LocalPlayer.Backpack:GetChildren()) do
-                    tool:Destroy()
-                end
-            end)
-
-            pcall(function()
-                if humanoid and humanoid.Parent then
-                    humanoid:ChangeState(Enum.HumanoidStateType.Dead)
-                end
-            end)
-
-            task.wait(0.3)
-
-            pcall(function()
-                if Players.LocalPlayer.Character == character then
-                    character:Destroy()
-                end
-            end)
-        end
+        -- Nếu vì lý do gì đó không respawn, trả camera lại để khỏi bị kẹt
+        task.delay(5, function()
+            if desyncRunning then return end
+            if workspace.CurrentCamera == cam then
+                cam.CameraType = oldCamType
+                cam.CameraSubject = oldSubject
+                cam.CFrame = oldCamCFrame
+            end
+        end)
 
         desyncRunning = false
-        print("✅ [DESYNC] Done, respawn initiated.")
+        print("✅ [DESYNC] Kill sent, waiting respawn...")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
     end)
 end
@@ -515,9 +515,23 @@ local function triggerDesync()
     createDesync(char)
 end
 
--- Sau khi respawn: ép velocity = 0 một thời gian để hết giật giật về
+-- Sau khi respawn: trả camera về bình thường + ép velocity=0 1 đoạn để hết giật về
 Players.LocalPlayer.CharacterAdded:Connect(function(char)
-    task.delay(0.3, function()
+    task.delay(0.1, function()
+        local cam = workspace.CurrentCamera
+        if cam then
+            cam.CameraType = Enum.CameraType.Custom
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                cam.CameraSubject = hum
+            else
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    cam.CameraSubject = hrp
+                end
+            end
+        end
+
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
 
@@ -1048,5 +1062,5 @@ end
 -- DESYNC STARTUP
 --========================
 setupSafeFFlags()
-print("✨ [READY] TanPhu Global Pets Finder + Desync BALANCED loaded!")
+print("✨ [READY] TanPhu Global Pets Finder + Desync (Cam Freeze) loaded!")
 print("✨ Bấm R hoặc /desync hoặc nút Desync bên panel trái.")
